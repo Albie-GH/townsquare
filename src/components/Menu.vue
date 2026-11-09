@@ -144,6 +144,47 @@
             >
               Vote history<em>[V]</em>
             </li>
+            <li v-if="!voice.joined" @click="joinVoice">
+              Join voice
+              <em>{{ voice.error ? "retry" : "off" }}</em>
+            </li>
+            <template v-else>
+              <li @click="voiceToggleMic">
+                Mic
+                <em>
+                  <span class="meter"
+                    ><span :style="{ width: voice.level + '%' }"></span
+                  ></span>
+                  {{ voice.micOn ? "On" : "Muted" }}
+                </em>
+              </li>
+              <li v-for="peer in voice.peers" :key="peer.id" class="voice-peer">
+                <span class="pname">
+                  {{ peer.name }}
+                  <small>
+                    {{
+                      peer.status === "connected"
+                        ? peer.route + (peer.rtt != null ? " " + peer.rtt + "ms" : "")
+                        : peer.status
+                    }}
+                  </small>
+                </span>
+                <em @click.stop="voice.setHear(peer.id, !peer.hear)">
+                  Hear
+                  <font-awesome-icon
+                    :icon="['fas', peer.hear ? 'check-square' : 'square']"
+                  />
+                </em>
+                <em @click.stop="voice.setTalk(peer.id, !peer.talk)">
+                  Talk
+                  <font-awesome-icon
+                    :icon="['fas', peer.talk ? 'check-square' : 'square']"
+                  />
+                </em>
+              </li>
+              <li @click="leaveVoice">Leave voice<em></em></li>
+            </template>
+            <li class="voice-error" v-if="voice.error">{{ voice.error }}</li>
             <li @click="leaveSession">
               Leave Session
               <em>{{ session.sessionId }}</em>
@@ -232,6 +273,7 @@
 
 <script>
 import { mapMutations, mapState } from "vuex";
+import voice from "../voice";
 
 export default {
   computed: {
@@ -240,7 +282,8 @@ export default {
   },
   data() {
     return {
-      tab: "grimoire"
+      tab: "grimoire",
+      voice: voice.state
     };
   },
   methods: {
@@ -306,9 +349,28 @@ export default {
     },
     leaveSession() {
       if (confirm("Are you sure you want to leave the active live game?")) {
+        voice.leave();
         this.$store.commit("session/setSpectator", false);
         this.$store.commit("session/setSessionId", "");
       }
+    },
+    joinVoice() {
+      if (!this.session.sessionId) return;
+      const seat = this.players.find(
+        p => p.id && p.id === this.session.playerId
+      );
+      const name = seat
+        ? seat.name
+        : this.session.isSpectator
+        ? "Player"
+        : "Storyteller";
+      voice.join(this.session.sessionId, name, this.session.playerId);
+    },
+    leaveVoice() {
+      voice.leave();
+    },
+    voiceToggleMic() {
+      voice.toggleMic();
     },
     addPlayer() {
       if (this.session.isSpectator) return;
@@ -532,6 +594,41 @@ export default {
         $demon 100%
       );
     }
+  }
+}
+
+.voice-peer {
+  flex-wrap: wrap;
+  .pname {
+    flex: 1 1 100%;
+    small {
+      opacity: 0.7;
+      margin-left: 4px;
+    }
+  }
+  em {
+    margin-left: 0;
+    margin-right: 10px;
+  }
+}
+
+.voice-error {
+  color: #ff6b6b !important;
+  font-size: 80%;
+}
+
+.meter {
+  display: inline-block;
+  width: 40px;
+  height: 6px;
+  margin-right: 6px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+  span {
+    display: block;
+    height: 100%;
+    background: #00f700;
   }
 }
 </style>

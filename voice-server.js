@@ -1,0 +1,75 @@
+// Voice signaling server for townsquare. Introduces players to each other; audio never passes through here.
+// Run with: node voice-server.js   (uses the "ws" package townsquare already depends on)
+const http = require("http");
+const crypto = require("crypto");
+const WebSocket = require("ws");
+
+const PORT = process.env.VOICE_PORT || 8090;
+const MAX_PLAYERS = 20;
+const rooms = new Map(); // room -> Map(id -> { ws, name, playerId })
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("voice signaling ok");
+});
+const wss = new WebSocket.Server({ server, maxPayload: 64 * 1024 });
+
+wss.on("connection", ws => {
+  let room = null;
+  let id = null;
+  ws.isAlive = true;
+  ws.on("pong", () => (ws.isAlive = true));
+
+  ws.on("message", raw => {
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch (e) {
+      return;
+    }
+
+    if (msg.type === "join" && !room) {
+      const roomName = String(msg.room || "town").slice(0, 60);
+      const name = String(msg.name || "Player").slice(0, 30);
+      const playerId = String(msg.playerId || "").slice(0, 40);
+      const members = rooms.get(roomName) || new Map();
+      if (members.size >= MAX_PLAYERS) {
+        ws.send(JSON.stringify({ type: "error", message: "Voice room is full." }));
+        return;
+      }
+      room = roomName;
+      id = crypto.randomBytes(8).toString("hex");
+      const peers = [...members].map(([pid, p]) => ({ id: pid, name: p.name, playerId: p.playerId }));
+      members.set(id, { ws, name, playerId });
+      rooms.set(room, members);
+      ws.send(JSON.stringify({ type: "welcome", id, peers }));
+      for (const [pid, p] of members) {
+        if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-joined", id, name, playerId }));
+      }
+      console.log(`${name} joined voice room "${room}" (${members.size})`);
+    }
+
+    if (msg.type === "signal" && room) {
+      const target = rooms.get(room) && rooms.get(room).get(msg.to);
+      if (target) target.ws.send(JSON.stringify({ type: "signal", from: id, data: msg.data }));
+    }
+  });
+
+  ws.on("close", () => {
+    const members = room && rooms.get(room);
+    if (!members) return;
+    members.delete(id);
+    for (const p of members.values()) p.ws.send(JSON.stringify({ type: "peer-left", id }));
+    if (!members.size) rooms.delete(room);
+  });
+});
+
+setInterval(() => {
+  wss.clients.forEach(ws => {
+    if (!ws.isAlive) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 15000);
+
+server.listen(PORT, () => console.log(`Voice signaling on port ${PORT}`));
