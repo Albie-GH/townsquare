@@ -19,6 +19,7 @@ const state = () => ({
   ping: 0,
   playerId: "",
   claimedSeat: -1,
+  claimName: "",
   nomination: false,
   votes: [],
   lockedVote: 0,
@@ -51,6 +52,7 @@ const mutations = {
   setNomination: set("nomination"),
   setVoteHistoryAllowed: set("isVoteHistoryAllowed"),
   claimSeat: set("claimedSeat"),
+  setClaimName: set("claimName"),
   distributeRoles: set("isRolesDistributed"),
   setSessionId(state, sessionId) {
     state.sessionId = sessionId

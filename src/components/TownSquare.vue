@@ -5,9 +5,12 @@
     :class="{
       public: grimoire.isPublic,
       spectator: session.isSpectator,
-      vote: session.nomination
+      vote: session.nomination,
+      'has-st': session.sessionId,
+      'st-host': session.sessionId && !session.isSpectator
     }"
   >
+    <StorytellerToken v-if="session.sessionId"></StorytellerToken>
     <ul class="circle" :class="['size-' + players.length]">
       <Player
         v-for="(player, index) in players"
@@ -92,9 +95,11 @@ import Player from "./Player";
 import Token from "./Token";
 import ReminderModal from "./modals/ReminderModal";
 import RoleModal from "./modals/RoleModal";
+import StorytellerToken from "./StorytellerToken";
 
 export default {
   components: {
+    StorytellerToken,
     Player,
     Token,
     RoleModal,
@@ -134,9 +139,18 @@ export default {
     },
     claimSeat(playerIndex) {
       if (!this.session.isSpectator) return;
-      if (this.session.playerId === this.players[playerIndex].id) {
+      const player = this.players[playerIndex];
+      if (this.session.playerId === player.id) {
+        this.$store.commit("session/setClaimName", "");
         this.$store.commit("session/claimSeat", -1);
       } else {
+        let name = "";
+        if (!player.name) {
+          // empty seat: ask who is sitting here
+          name = (prompt("What's your name?") || "").trim().slice(0, 30);
+          if (!name) return; // cancelled, so don't claim
+        }
+        this.$store.commit("session/setClaimName", name);
         this.$store.commit("session/claimSeat", playerIndex);
       }
     },
@@ -484,6 +498,15 @@ export default {
       }
     }
   }
+}
+
+// make room for the Storyteller token in the top left
+#townsquare.has-st > .fabled {
+  top: calc(20px + 11vh + 100px);
+}
+// the Storyteller also has the "Mute all" button under the nameplate
+#townsquare.st-host > .fabled {
+  top: calc(20px + 11vh + 150px);
 }
 
 #townsquare.public > .bluffs {

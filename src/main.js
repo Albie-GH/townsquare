@@ -28,6 +28,8 @@ const faIcons = [
   "Heartbeat",
   "Image",
   "Link",
+  "Microphone",
+  "MicrophoneSlash",
   "MinusCircle",
   "PeopleArrows",
   "PlusCircle",

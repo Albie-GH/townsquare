@@ -1,3 +1,5 @@
+import voice from "../voice";
+
 class LiveSession {
   constructor(store) {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -15,6 +17,7 @@ class LiveSession {
     this._reconnectTimer = null;
     this._players = {}; // map of players connected to a session
     this._pings = {}; // map of player IDs to ping
+    this._claimNames = new Set(); // playerIds whose seat name came from claiming it
     // reconnect to previous session
     if (this._store.state.session.sessionId) {
       this.connect(this._store.state.session.sessionId);
@@ -619,7 +622,8 @@ class LiveSession {
     if (!this._isSpectator) return;
     const players = this._store.state.players.players;
     if (players.length > seat && (seat < 0 || !players[seat].id)) {
-      this._send("claim", [seat, this._store.state.session.playerId]);
+      const name = seat >= 0 ? this._store.state.session.claimName : "";
+      this._send("claim", [seat, this._store.state.session.playerId, name]);
     }
   }
 
@@ -629,10 +633,13 @@ class LiveSession {
    * @param value playerId to add / remove
    * @private
    */
-  _updateSeat([index, value]) {
+  _updateSeat([index, value, name]) {
     if (this._isSpectator) return;
     const property = "id";
     const players = this._store.state.players.players;
+    // ignore claims on a seat somebody else already holds
+    const target = index >= 0 ? players[index] : null;
+    if (target && target.id && target.id !== value) return;
     // remove previous seat
     const oldIndex = players.findIndex(({ id }) => id === value);
     if (oldIndex >= 0 && oldIndex !== index) {
@@ -641,11 +648,29 @@ class LiveSession {
         property,
         value: ""
       });
+      // a name the player typed in when claiming goes back to [empty] with the seat
+      if (this._claimNames.has(value)) {
+        this._store.commit("players/update", {
+          player: players[oldIndex],
+          property: "name",
+          value: ""
+        });
+      }
     }
-    // add playerId to new seat
+    this._claimNames.delete(value);
+    // add playerId (and name, for an empty seat) to new seat
     if (index >= 0) {
       const player = players[index];
       if (!player) return;
+      const cleanName = typeof name === "string" ? name.trim().slice(0, 30) : "";
+      if (cleanName && !player.name) {
+        this._store.commit("players/update", {
+          player,
+          property: "name",
+          value: cleanName
+        });
+        this._claimNames.add(value);
+      }
       this._store.commit("players/update", { player, property, value });
     }
     // update player session list as if this was a ping
@@ -844,15 +869,30 @@ export default store => {
   // setup
   const session = new LiveSession(store);
 
+  // Voice starts automatically with the live session
+  const joinVoice = ({ session: { sessionId, isSpectator, playerId } }) => {
+    voice.join(
+      sessionId,
+      isSpectator ? "Player" : "Storyteller",
+      playerId,
+      !isSpectator
+    );
+  };
+  // the constructor reconnects to a stored session without a mutation
+  if (store.state.session.sessionId) joinVoice(store.state);
+
   // listen to mutations
   store.subscribe(({ type, payload }, state) => {
     switch (type) {
       case "session/setSessionId":
         if (state.session.sessionId) {
           session.connect(state.session.sessionId);
+          voice.leave(); // switching sessions: drop the old voice room first
+          joinVoice(state);
         } else {
           window.location.hash = "";
           session.disconnect();
+          voice.leave();
         }
         break;
       case "session/claimSeat":
@@ -887,6 +927,10 @@ export default store => {
         break;
       case "toggleNight":
         session.setIsNight();
+        // night falls: the Storyteller's client mutes every player
+        if (!state.session.isSpectator && state.grimoire.isNight) {
+          voice.setAllMuted(true);
+        }
         break;
       case "setEdition":
         session.sendEdition();

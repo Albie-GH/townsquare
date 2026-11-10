@@ -10,7 +10,8 @@
           'no-vote': player.isVoteless,
           you: session.sessionId && player.id && player.id === session.playerId,
           'vote-yes': session.votes[index],
-          'vote-lock': voteLocked
+          'vote-lock': voteLocked,
+          speaking
         },
         player.role.team
       ]"
@@ -41,6 +42,7 @@
         :role="player.role"
         @set-role="$emit('trigger', ['openRoleModal'])"
       />
+      <div class="speaking-ring"></div>
 
       <!-- Overlay icons -->
       <div class="overlay">
@@ -108,11 +110,26 @@
         @click="isMenuOpen = !isMenuOpen"
         :class="{ active: isMenuOpen }"
       >
-        <span>{{ player.name }}</span>
+        <span :class="{ empty: !player.name }">{{
+          player.name || "[empty]"
+        }}</span>
         <font-awesome-icon icon="venus-mars" v-if="player.pronouns" />
         <div class="pronouns" v-if="player.pronouns">
           <span>{{ player.pronouns }}</span>
         </div>
+      </div>
+
+      <!-- Your own mute toggle, only on your seat -->
+      <div
+        class="mic-toggle"
+        v-if="isYou && voice.joined"
+        :class="{ muted: !voice.micOn, locked: micLocked }"
+        :title="micTitle"
+        @click.stop="toggleMic"
+      >
+        <font-awesome-icon
+          :icon="voice.micOn ? 'microphone' : 'microphone-slash'"
+        />
       </div>
 
       <transition name="fold">
@@ -156,6 +173,22 @@
               </li>
             </template>
           </template>
+          <li
+            class="volume"
+            v-if="player.id && player.id !== session.playerId && voice.joined"
+          >
+            <font-awesome-icon icon="volume-up" />
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              :value="volume"
+              @input="setVolume"
+              title="How loud this player is for you"
+            />
+            <span>{{ volume }}%</span>
+          </li>
           <li
             @click="claimSeat"
             v-if="session.isSpectator"
@@ -207,6 +240,7 @@
 <script>
 import Token from "./Token";
 import { mapGetters, mapState } from "vuex";
+import voice from "../voice";
 
 export default {
   components: {
@@ -224,6 +258,30 @@ export default {
     ...mapGetters({ nightOrder: "players/nightOrder" }),
     index: function() {
       return this.players.indexOf(this.player);
+    },
+    speaking: function() {
+      return (
+        !!this.player.id && this.voice.speakingIds.includes(this.player.id)
+      );
+    },
+    isYou: function() {
+      return (
+        !!this.session.sessionId &&
+        !!this.player.id &&
+        this.player.id === this.session.playerId
+      );
+    },
+    // the Storyteller has everyone muted, so players can't unmute themselves
+    micLocked: function() {
+      return this.voice.allMuted && !this.voice.isHost;
+    },
+    micTitle: function() {
+      if (this.micLocked) return "Muted by the Storyteller";
+      return this.voice.micOn ? "Mute yourself" : "Unmute yourself";
+    },
+    volume: function() {
+      const v = this.voice.volumes[this.player.id];
+      return v === undefined ? 100 : v;
     },
     voteLocked: function() {
       const session = this.session;
@@ -249,7 +307,8 @@ export default {
   data() {
     return {
       isMenuOpen: false,
-      isSwap: false
+      isSwap: false,
+      voice: voice.state
     };
   },
   methods: {
@@ -333,6 +392,12 @@ export default {
     claimSeat() {
       this.isMenuOpen = false;
       this.$emit("trigger", ["claimSeat"]);
+    },
+    toggleMic() {
+      voice.toggleMic();
+    },
+    setVolume(event) {
+      voice.setVolume(this.player.id, parseInt(event.target.value, 10));
     },
     /**
      * Allow the ST to override a locked vote.
@@ -775,6 +840,77 @@ li.move:not(.from) .player .overlay svg.move {
 
 .player.dead > .name {
   opacity: 0.5;
+}
+
+.player > .name span.empty {
+  opacity: 0.6;
+}
+
+/***** Talking ring *****/
+.player .speaking-ring {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: calc(100% + 8px);
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
+  border: 4px solid #3ddc84;
+  border-radius: 50%;
+  box-shadow: 0 0 12px 3px rgba(61, 220, 132, 0.7);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms;
+  z-index: 1;
+}
+.player.speaking .speaking-ring {
+  opacity: 1;
+}
+
+/***** Own mute toggle, next to the nameplate *****/
+.player .mic-toggle {
+  position: absolute;
+  top: 5px;
+  right: 110%;
+  margin-right: 8px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  border: 3px solid black;
+  border-radius: 50%;
+  box-shadow: 0 0 5px black;
+  cursor: pointer;
+  z-index: 3;
+  &:hover {
+    color: red;
+  }
+  &.muted {
+    color: #ff6b6b;
+  }
+  &.locked {
+    cursor: not-allowed;
+    opacity: 0.7;
+    &:hover {
+      color: #ff6b6b;
+    }
+  }
+}
+
+/***** Volume slider in the player menu *****/
+.player > .menu li.volume {
+  display: flex;
+  align-items: center;
+  cursor: default;
+  &:hover {
+    color: inherit;
+  }
+  input {
+    width: 90px;
+    margin: 0 6px;
+    cursor: pointer;
+  }
 }
 
 /***** Player menu *****/

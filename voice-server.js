@@ -6,7 +6,8 @@ const WebSocket = require("ws");
 
 const PORT = process.env.VOICE_PORT || 8090;
 const MAX_PLAYERS = 20;
-const rooms = new Map(); // room -> Map(id -> { ws, name, playerId })
+const rooms = new Map(); // room -> Map(id -> { ws, name, playerId, isHost })
+const mutedRooms = new Set(); // rooms where the Storyteller has muted everyone
 
 const server = http.createServer((req, res) => {
   res.writeHead(200);
@@ -39,14 +40,37 @@ wss.on("connection", ws => {
       }
       room = roomName;
       id = crypto.randomBytes(8).toString("hex");
-      const peers = [...members].map(([pid, p]) => ({ id: pid, name: p.name, playerId: p.playerId }));
-      members.set(id, { ws, name, playerId });
+      const isHost = !!msg.isHost;
+      const peers = [...members].map(([pid, p]) => ({ id: pid, name: p.name, playerId: p.playerId, isHost: p.isHost }));
+      members.set(id, { ws, name, playerId, isHost });
       rooms.set(room, members);
-      ws.send(JSON.stringify({ type: "welcome", id, peers }));
+      ws.send(JSON.stringify({ type: "welcome", id, peers, allMuted: mutedRooms.has(room) }));
       for (const [pid, p] of members) {
-        if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-joined", id, name, playerId }));
+        if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-joined", id, name, playerId, isHost }));
       }
       console.log(`${name} joined voice room "${room}" (${members.size})`);
+    }
+
+    if (msg.type === "mute-all" && room) {
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (me && me.isHost) {
+        const on = !!msg.on;
+        if (on) mutedRooms.add(room);
+        else mutedRooms.delete(room);
+        for (const p of members.values()) p.ws.send(JSON.stringify({ type: "mute-all", on }));
+      }
+    }
+
+    if (msg.type === "rename" && room) {
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (me && me.isHost) {
+        me.name = String(msg.name || "Storyteller").slice(0, 30);
+        for (const [pid, p] of members) {
+          if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-renamed", id, name: me.name }));
+        }
+      }
     }
 
     if (msg.type === "signal" && room) {
@@ -60,7 +84,10 @@ wss.on("connection", ws => {
     if (!members) return;
     members.delete(id);
     for (const p of members.values()) p.ws.send(JSON.stringify({ type: "peer-left", id }));
-    if (!members.size) rooms.delete(room);
+    if (!members.size) {
+      rooms.delete(room);
+      mutedRooms.delete(room);
+    }
   });
 });
 

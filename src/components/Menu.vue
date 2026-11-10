@@ -155,12 +155,31 @@
                   <span class="meter"
                     ><span :style="{ width: voice.level + '%' }"></span
                   ></span>
-                  {{ voice.micOn ? "On" : "Muted" }}
+                  {{
+                    voice.micOn
+                      ? "On"
+                      : voice.allMuted && !voice.isHost
+                      ? "Muted by ST"
+                      : "Muted"
+                  }}
                 </em>
               </li>
-              <li v-for="peer in voice.peers" :key="peer.id" class="voice-peer">
+              <li v-if="!session.isSpectator" @click="toggleMuteAll">
+                Mute everyone
+                <em>
+                  <font-awesome-icon
+                    :icon="['fas', voice.allMuted ? 'check-square' : 'square']"
+                  />
+                </em>
+              </li>
+              <li
+                v-for="peer in voice.peers"
+                :key="peer.id"
+                class="voice-peer"
+                :class="{ speaking: peer.speaking }"
+              >
                 <span class="pname">
-                  {{ peer.name }}
+                  {{ peerName(peer) }}
                   <small>
                     {{
                       peer.status === "connected"
@@ -169,18 +188,6 @@
                     }}
                   </small>
                 </span>
-                <em @click.stop="voice.setHear(peer.id, !peer.hear)">
-                  Hear
-                  <font-awesome-icon
-                    :icon="['fas', peer.hear ? 'check-square' : 'square']"
-                  />
-                </em>
-                <em @click.stop="voice.setTalk(peer.id, !peer.talk)">
-                  Talk
-                  <font-awesome-icon
-                    :icon="['fas', peer.talk ? 'check-square' : 'square']"
-                  />
-                </em>
               </li>
               <li @click="leaveVoice">Leave voice<em></em></li>
             </template>
@@ -354,6 +361,10 @@ export default {
         this.$store.commit("session/setSessionId", "");
       }
     },
+    peerName(peer) {
+      const seat = this.players.find(p => p.id && p.id === peer.playerId);
+      return seat && seat.name ? seat.name : peer.name;
+    },
     joinVoice() {
       if (!this.session.sessionId) return;
       const seat = this.players.find(
@@ -364,7 +375,12 @@ export default {
         : this.session.isSpectator
         ? "Player"
         : "Storyteller";
-      voice.join(this.session.sessionId, name, this.session.playerId);
+      voice.join(
+        this.session.sessionId,
+        name,
+        this.session.playerId,
+        !this.session.isSpectator
+      );
     },
     leaveVoice() {
       voice.leave();
@@ -372,13 +388,13 @@ export default {
     voiceToggleMic() {
       voice.toggleMic();
     },
+    toggleMuteAll() {
+      voice.setAllMuted(!voice.state.allMuted);
+    },
     addPlayer() {
       if (this.session.isSpectator) return;
       if (this.players.length >= 20) return;
-      const name = prompt("Player name");
-      if (name) {
-        this.$store.commit("players/add", name);
-      }
+      this.$store.commit("players/add", "");
     },
     randomizeSeatings() {
       if (this.session.isSpectator) return;
@@ -610,6 +626,10 @@ export default {
     margin-left: 0;
     margin-right: 10px;
   }
+}
+
+.voice-peer.speaking .pname {
+  color: #3ddc84;
 }
 
 .voice-error {
