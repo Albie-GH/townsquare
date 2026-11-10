@@ -12,6 +12,7 @@
           'vote-yes': session.votes[index],
           'vote-lock': voteLocked,
           speaking,
+          'hand-up': handUp,
           'has-mic': showMic
         },
         player.role.team
@@ -41,9 +42,12 @@
 
       <Token
         :role="player.role"
-        @set-role="$emit('trigger', ['openRoleModal'])"
+        @set-role="onTokenClick"
       />
       <div class="speaking-ring"></div>
+      <div class="hand-raised" v-if="handUp" title="Hand raised">
+        <font-awesome-icon icon="hand-paper" />
+      </div>
 
       <!-- Overlay icons -->
       <div class="overlay">
@@ -132,6 +136,15 @@
           :icon="isMuted ? 'microphone-slash' : 'microphone'"
         />
       </div>
+
+      <!-- Menu for another player's character circle (players only) -->
+      <transition name="fold">
+        <ul class="menu token-menu" v-if="isTokenMenuOpen">
+          <li @click="addRoleIcon">
+            <font-awesome-icon icon="theater-masks" />Add Role Icon
+          </li>
+        </ul>
+      </transition>
 
       <transition name="fold">
         <ul class="menu" v-if="isMenuOpen">
@@ -272,6 +285,9 @@ export default {
         this.player.id === this.session.playerId
       );
     },
+    handUp: function() {
+      return !!this.player.id && this.voice.handIds.includes(this.player.id);
+    },
     isMuted: function() {
       return !!this.player.id && this.voice.mutedIds.includes(this.player.id);
     },
@@ -323,6 +339,7 @@ export default {
   data() {
     return {
       isMenuOpen: false,
+      isTokenMenuOpen: false,
       isSwap: false,
       voice: voice.state
     };
@@ -411,6 +428,25 @@ export default {
     },
     toggleMic() {
       voice.toggleMic();
+    },
+    // Players: your own circle raises / lowers your hand, someone else's opens a menu.
+    // The Storyteller keeps the old behaviour and opens the role picker.
+    onTokenClick() {
+      if (!this.session.isSpectator) {
+        this.$emit("trigger", ["openRoleModal"]);
+      } else if (this.isYou) {
+        this.isTokenMenuOpen = false;
+        voice.toggleHand();
+      } else if (this.player.role && this.player.role.team === "traveler") {
+        return;
+      } else {
+        this.isMenuOpen = false;
+        this.isTokenMenuOpen = !this.isTokenMenuOpen;
+      }
+    },
+    addRoleIcon() {
+      this.isTokenMenuOpen = false;
+      this.$emit("trigger", ["openRoleModal"]);
     },
     setVolume(event) {
       voice.setVolume(this.player.id, parseInt(event.target.value, 10));
@@ -882,6 +918,41 @@ li.move:not(.from) .player .overlay svg.move {
   opacity: 1;
 }
 
+/***** Raised hand *****/
+.player .hand-raised {
+  position: absolute;
+  // opposite side to the menu (menu opens right by default), overlapping the circle
+  top: 0;
+  left: -32%;
+  width: 48%;
+  aspect-ratio: 1 / 1;
+  //font-size: 5.6vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffee006b;
+  //border: 3px solid #ffee006f;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #fff000;
+  color: #ffd000;
+  pointer-events: none;
+  z-index: 4;
+}
+.player .hand-raised svg {
+  width: 80%;
+  height: 80%;
+}
+
+
+.player .token-menu {
+  bottom: auto;
+  top: 20%;
+  &:before {
+    bottom: auto;
+    top: 8px;
+  }
+}
+
 /***** Mute toggle, down by the nameplate on the same side as the menu *****/
 .player .mic-toggle {
   position: absolute;
@@ -1032,6 +1103,14 @@ li.move:not(.from) .player .overlay svg.move {
     top: 15%;
     text-shadow: 0 1px 1px #f6dfbd, 0 -1px 1px #f6dfbd, 1px 0 1px #f6dfbd,
       -1px 0 1px #f6dfbd;
+  }
+
+  // The label box reaches well below the token. Players at the bottom of the
+  // circle stack their tokens upwards, so a later token's invisible label sat
+  // on top of the earlier token. Let clicks pass through to the token itself.
+  .text,
+  .icon {
+    pointer-events: none;
   }
 
   .icon,

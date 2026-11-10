@@ -22,6 +22,41 @@ function loadHostName() {
   }
 }
 
+const RNNOISE_KEY = "botcRnnoise";
+const RNNOISE_URL = (process.env.BASE_URL || "/") + "rnnoise/";
+
+function loadRnnoisePref() {
+  try {
+    return localStorage.getItem(RNNOISE_KEY) !== "off";
+  } catch (e) {
+    return true;
+  }
+}
+
+const GATE_KEY = "botcNoiseGate";
+const BROWSER_NS_KEY = "botcBrowserNs";
+
+function loadGatePref() {
+  try {
+    return parseInt(localStorage.getItem(GATE_KEY), 10) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function loadBrowserNsPref() {
+  try {
+    return localStorage.getItem(BROWSER_NS_KEY) !== "off";
+  } catch (e) {
+    return true;
+  }
+}
+
+// gate strength 0-100 -> threshold in dB (0 = off, 100 = -25dB)
+function gateDb(level) {
+  return level <= 0 ? -100 : -70 + level * 0.45;
+}
+
 function loadVolumes() {
   try {
     return JSON.parse(localStorage.getItem(VOLUME_KEY)) || {};
@@ -45,16 +80,25 @@ class VoiceChat {
       hostName: loadHostName(), // the Storyteller's chosen name ("Storyteller" = none)
       isHost: false, // this client is the Storyteller
       allMuted: false, // the Storyteller has muted everyone (players can't unmute)
-      mutedIds: [] // playerIds currently muted (self-muted or muted by the Storyteller)
+      mutedIds: [], // playerIds currently muted (self-muted or muted by the Storyteller)
+      handIds: [], // playerIds with a raised hand, including your own
+      handUp: false, // your own hand is raised
+      rnnoise: loadRnnoisePref(), // RNNoise noise suppression switched on
+      rnnoiseStatus: "off", // off | loading | waiting | on | unsupported | error
+      browserNs: loadBrowserNsPref(), // also use the browser's own noise filter
+      gate: loadGatePref() // noise gate strength 0-100, 0 = off
     });
     this._mutedKey = "";
+    this._handKey = "";
     this._levelTimer = null;
     this._pollingLevels = false;
     this._busy = false;
     this._gen = 0; // bumped on every teardown so a stale join can bail out
     this._ws = null;
     this._stream = null;
-    this._track = null;
+    this._track = null; // the track currently sent to peers
+    this._rawTrack = null; // the microphone track itself
+    this._pipeline = null; // RNNoise audio graph, once loaded
     this._playerId = "";
     this._conns = new Map(); // id -> { pc, audio, sender, playerId, meter, lastLoud }
     this._names = new Map(); // id -> { name, playerId } from peer-joined
@@ -101,8 +145,12 @@ class VoiceChat {
     this._track = stream.getAudioTracks()[0];
     this.state.micOn = true;
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    this._ctx = new AudioCtx();
+    this._ctx = this._createContext(AudioCtx);
+    this._ctx.onstatechange = () => this._activatePipeline();
     this._selfMeter = this._makeMeter(this._stream);
+    this._rawTrack = this._track;
+    this._applyBrowserNs();
+    this._initDenoise(gen);
 
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${window.location.host}/voice`);
@@ -150,6 +198,31 @@ class VoiceChat {
     this.state.micOn = on;
     this._send({ type: "mic", on });
     this._refreshMuted();
+  }
+
+  // Raise or lower your own hand; everyone in the room sees it.
+  setHand(on) {
+    on = !!on;
+    this.state.handUp = on;
+    this._send({ type: "hand", on });
+    this._refreshHands();
+  }
+
+  toggleHand() {
+    this.setHand(!this.state.handUp);
+  }
+
+  _refreshHands() {
+    const ids = [];
+    if (this._playerId && this.state.handUp) ids.push(this._playerId);
+    for (const p of this.state.peers) {
+      if (p.hand && p.playerId) ids.push(p.playerId);
+    }
+    const key = ids.join(",");
+    if (key !== this._handKey) {
+      this._handKey = key;
+      this.state.handIds = ids;
+    }
   }
 
   // Works out which playerIds are muted, for the muted icon by each nameplate.
@@ -284,6 +357,9 @@ class VoiceChat {
     } else if (msg.type === "peer-mic") {
       this._patch(msg.id, { micOn: !!msg.on });
       this._refreshMuted();
+    } else if (msg.type === "peer-hand") {
+      this._patch(msg.id, { hand: !!msg.on });
+      this._refreshHands();
     } else if (msg.type === "peer-renamed") {
       const known = this._names.get(msg.id);
       if (known) known.name = msg.name;
@@ -366,6 +442,7 @@ class VoiceChat {
         playerId: info.playerId || "",
         isHost: !!info.isHost,
         micOn: info.micOn !== false,
+        hand: !!info.hand,
         hear: true,
         talk: true,
         speaking: false,
@@ -375,6 +452,7 @@ class VoiceChat {
       }
     ];
     this._refreshMuted();
+    this._refreshHands();
     return conn;
   }
 
@@ -391,6 +469,7 @@ class VoiceChat {
     this._names.delete(id);
     this.state.peers = this.state.peers.filter(p => p.id !== id);
     this._refreshMuted();
+    this._refreshHands();
   }
 
   _patch(id, props) {
@@ -404,6 +483,192 @@ class VoiceChat {
     ["pointerdown", "keydown"].forEach(ev =>
       document.removeEventListener(ev, this._unlockHandler)
     );
+  }
+
+  // RNNoise only works at 48kHz, so ask for that
+  _createContext(AudioCtx) {
+    try {
+      return new AudioCtx({ sampleRate: 48000 });
+    } catch (e) {
+      return new AudioCtx();
+    }
+  }
+
+  // Turn RNNoise noise suppression on or off. Remembered in this browser.
+  setRnnoise(on) {
+    on = !!on;
+    this.state.rnnoise = on;
+    try {
+      localStorage.setItem(RNNOISE_KEY, on ? "on" : "off");
+    } catch (e) {
+      // storage unavailable, the choice just won't be remembered
+    }
+    if (!this._ctx) return;
+    if (this._pipeline) this._applyDenoiseMode();
+    else if (on && this.state.rnnoiseStatus !== "loading") {
+      this._initDenoise(this._gen);
+    }
+  }
+
+  // Builds: mic -> RNNoise -> (mix) -> outgoing track, with a dry path for "off".
+  async _initDenoise(gen) {
+    const ctx = this._ctx;
+    if (!this.state.rnnoise) {
+      this.state.rnnoiseStatus = "off";
+      return;
+    }
+    if (!ctx.audioWorklet || ctx.sampleRate !== 48000) {
+      this.state.rnnoiseStatus = "unsupported";
+      return;
+    }
+    this.state.rnnoiseStatus = "loading";
+    try {
+      const {
+        loadRnnoise,
+        RnnoiseWorkletNode
+      } = await import("@sapphi-red/web-noise-suppressor");
+      const wasmBinary = await loadRnnoise({
+        url: RNNOISE_URL + "rnnoise.wasm",
+        simdUrl: RNNOISE_URL + "rnnoise_simd.wasm"
+      });
+      await ctx.audioWorklet.addModule(RNNOISE_URL + "rnnoiseWorklet.js");
+      if (gen !== this._gen || ctx !== this._ctx) return; // left meanwhile
+      const node = new RnnoiseWorkletNode(ctx, { wasmBinary, maxChannels: 2 });
+      const source = ctx.createMediaStreamSource(this._stream);
+      const wet = ctx.createGain();
+      const dry = ctx.createGain();
+      const mix = ctx.createGain();
+      const dest = ctx.createMediaStreamDestination();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(dry);
+      dry.connect(mix);
+      node.connect(wet);
+      wet.connect(mix);
+      // noise gate on the audio thread; if its file is missing we skip it
+      let gate = null;
+      try {
+        await ctx.audioWorklet.addModule(RNNOISE_URL + "noiseGate.js");
+        gate = new AudioWorkletNode(ctx, "botc-noise-gate");
+      } catch (e) {
+        console.warn("Noise gate unavailable", e);
+      }
+      if (gen !== this._gen || ctx !== this._ctx) return;
+      const out = gate || mix;
+      if (gate) mix.connect(gate);
+      out.connect(dest);
+      out.connect(analyser);
+      this._pipeline = {
+        source,
+        node,
+        wet,
+        dry,
+        mix,
+        gate,
+        dest,
+        analyser,
+        track: dest.stream.getAudioTracks()[0],
+        connected: false,
+        active: false
+      };
+      // the talking ring and mic meter should follow the cleaned-up audio
+      this._selfMeter = { analyser, data: new Uint8Array(analyser.fftSize) };
+      this._applyDenoiseMode();
+      this._applyGate();
+      this._activatePipeline();
+    } catch (e) {
+      console.warn("RNNoise failed to load, keeping the browser's own noise suppression", e);
+      if (gen === this._gen) this.state.rnnoiseStatus = "error";
+    }
+  }
+
+  _applyDenoiseMode() {
+    const p = this._pipeline;
+    if (!p) return;
+    const on = this.state.rnnoise;
+    p.wet.gain.value = on ? 1 : 0;
+    p.dry.gain.value = on ? 0 : 1;
+    // only run the neural net while it is in use
+    if (on && !p.connected) {
+      p.source.connect(p.node);
+      p.connected = true;
+    } else if (!on && p.connected) {
+      p.source.disconnect(p.node);
+      p.connected = false;
+    }
+    this.state.rnnoiseStatus = on ? (p.active ? "on" : "waiting") : "off";
+  }
+
+  // The browser's own filter also catches keyboard and mouse clicks, which
+  // RNNoise tends to let through, so by default both run.
+  _applyBrowserNs() {
+    if (!this._rawTrack) return;
+    this._rawTrack
+      .applyConstraints({ noiseSuppression: this.state.browserNs })
+      .catch(() => {});
+  }
+
+  setBrowserNs(on) {
+    on = !!on;
+    this.state.browserNs = on;
+    try {
+      localStorage.setItem(BROWSER_NS_KEY, on ? "on" : "off");
+    } catch (e) {
+      // storage unavailable, the choice just won't be remembered
+    }
+    this._applyBrowserNs();
+  }
+
+  // Noise gate: 0 = off, higher = stricter. Anything quieter than the
+  // threshold is cut, so quiet noise between words disappears.
+  setGate(level) {
+    const v = Math.max(0, Math.min(100, Math.round(level) || 0));
+    this.state.gate = v;
+    try {
+      localStorage.setItem(GATE_KEY, String(v));
+    } catch (e) {
+      // storage unavailable, the setting just won't be remembered
+    }
+    this._applyGate();
+  }
+
+  _applyGate() {
+    const p = this._pipeline;
+    if (!p || !p.gate) return;
+    p.gate.parameters.get("threshold").value = gateDb(this.state.gate);
+  }
+
+  // Browsers keep the audio graph silent until the page has been clicked, so
+  // peers keep hearing the plain mic until the graph is running, then we switch.
+  _activatePipeline() {
+    const p = this._pipeline;
+    if (!p || p.active || !this._ctx || this._ctx.state !== "running") return;
+    p.active = true;
+    this._setOutgoing(p.track);
+    this.state.rnnoiseStatus = this.state.rnnoise ? "on" : "off";
+  }
+
+  _setOutgoing(track) {
+    if (!track || track === this._track) return;
+    track.enabled = this.state.micOn;
+    this._track = track;
+    for (const [id, c] of this._conns) {
+      const peer = this.state.peers.find(p => p.id === id);
+      if (!peer || peer.talk) c.sender.replaceTrack(track).catch(() => {});
+    }
+  }
+
+  _disposePipeline() {
+    const p = this._pipeline;
+    this._pipeline = null;
+    if (!p) return;
+    try {
+      p.source.disconnect();
+      p.node.disconnect();
+      if (p.node.destroy) p.node.destroy();
+    } catch (e) {
+      // already gone
+    }
   }
 
   _makeMeter(stream) {
@@ -424,7 +689,7 @@ class VoiceChat {
   // Runs every 100ms: updates your mic meter and works out who is talking.
   _tick() {
     const now = Date.now();
-    const level = this._levelOf(this._selfMeter);
+    const level = this.state.micOn ? this._levelOf(this._selfMeter) : 0;
     if (level !== this.state.level) this.state.level = level;
     if (this.state.micOn && level >= SPEAKING_LEVEL) this._selfLoud = now;
 
@@ -523,9 +788,11 @@ class VoiceChat {
     }
     this._conns.clear();
     this._names.clear();
+    this._disposePipeline();
     if (this._stream) this._stream.getTracks().forEach(t => t.stop());
     if (this._ctx) this._ctx.close();
-    this._stream = this._track = this._ctx = this._selfMeter = null;
+    this._stream = this._track = this._rawTrack = null;
+    this._ctx = this._selfMeter = null;
     this._playerId = "";
     this._speakingKey = "";
     this._busy = false;
@@ -535,6 +802,10 @@ class VoiceChat {
     this.state.speakingIds = [];
     this.state.mutedIds = [];
     this._mutedKey = "";
+    this.state.handIds = [];
+    this.state.handUp = false;
+    this._handKey = "";
+    this.state.rnnoiseStatus = "off";
     this.state.error = error || "";
   }
 }

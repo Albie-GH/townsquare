@@ -160,8 +160,11 @@ export default {
     },
     openRoleModal(playerIndex) {
       const player = this.players[playerIndex];
-      if (this.session.isSpectator && player && player.role.team === "traveler")
-        return;
+      if (this.session.isSpectator && player) {
+        // travelers are fixed, and your own character comes from the Storyteller
+        if (player.role.team === "traveler") return;
+        if (player.id && player.id === this.session.playerId) return;
+      }
       this.selectedPlayer = playerIndex;
       this.$store.commit("toggleModal", "role");
     },
@@ -345,6 +348,11 @@ export default {
         .fold-enter,
         .fold-leave-to {
           transform: perspective(200px) rotateY(-90deg);
+        }
+        // raised hand goes on the opposite side to the menu
+        .player > .hand-raised {
+          left: auto;
+          right: -22%;
         }
         // mute icon sits on the same side as the menu
         .player > .mic-toggle {

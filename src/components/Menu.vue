@@ -172,6 +172,41 @@
                   />
                 </em>
               </li>
+              <li @click="toggleNoiseSuppression">
+                Noise suppression
+                <em>
+                  {{
+                    !voice.rnnoise
+                      ? "Off"
+                      : voice.rnnoiseStatus === "loading"
+                      ? "Loading"
+                      : voice.rnnoiseStatus === "waiting"
+                      ? "Waiting for click"
+                      : voice.rnnoiseStatus === "error"
+                      ? "Failed"
+                      : voice.rnnoiseStatus === "unsupported"
+                      ? "Unsupported"
+                      : "On"
+                  }}
+                </em>
+              </li>
+              <li @click="toggleBrowserNoise">
+                Browser filter
+                <em>{{ voice.browserNs ? "On" : "Off" }}</em>
+              </li>
+              <li class="gate">
+                Noise gate
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  :value="voice.gate"
+                  @input="setGate"
+                  title="Cuts anything quieter than this. 0 is off."
+                />
+                <em>{{ voice.gate || "Off" }}</em>
+              </li>
               <li
                 v-for="peer in voice.peers"
                 :key="peer.id"
@@ -387,6 +422,15 @@ export default {
     },
     voiceToggleMic() {
       voice.toggleMic();
+    },
+    toggleNoiseSuppression() {
+      voice.setRnnoise(!voice.state.rnnoise);
+    },
+    toggleBrowserNoise() {
+      voice.setBrowserNs(!voice.state.browserNs);
+    },
+    setGate(event) {
+      voice.setGate(parseInt(event.target.value, 10));
     },
     toggleMuteAll() {
       voice.setAllMuted(!voice.state.allMuted);
@@ -630,6 +674,12 @@ export default {
 
 .voice-peer.speaking .pname {
   color: #3ddc84;
+}
+
+li.gate input {
+  width: 70px;
+  margin: 0 4px;
+  cursor: pointer;
 }
 
 .voice-error {

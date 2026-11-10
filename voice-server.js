@@ -41,8 +41,8 @@ wss.on("connection", ws => {
       room = roomName;
       id = crypto.randomBytes(8).toString("hex");
       const isHost = !!msg.isHost;
-      const peers = [...members].map(([pid, p]) => ({ id: pid, name: p.name, playerId: p.playerId, isHost: p.isHost, micOn: p.micOn !== false }));
-      members.set(id, { ws, name, playerId, isHost, micOn: true });
+      const peers = [...members].map(([pid, p]) => ({ id: pid, name: p.name, playerId: p.playerId, isHost: p.isHost, micOn: p.micOn !== false, hand: !!p.hand }));
+      members.set(id, { ws, name, playerId, isHost, micOn: true, hand: false });
       rooms.set(room, members);
       ws.send(JSON.stringify({ type: "welcome", id, peers, allMuted: mutedRooms.has(room) }));
       for (const [pid, p] of members) {
@@ -69,6 +69,17 @@ wss.on("connection", ws => {
         me.micOn = !!msg.on;
         for (const [pid, p] of members) {
           if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-mic", id, on: me.micOn }));
+        }
+      }
+    }
+
+    if (msg.type === "hand" && room) {
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (me) {
+        me.hand = !!msg.on;
+        for (const [pid, p] of members) {
+          if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-hand", id, on: me.hand }));
         }
       }
     }
