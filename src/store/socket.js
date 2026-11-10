@@ -930,6 +930,9 @@ export default store => {
         // night falls: mute every player; day breaks: unmute everyone
         if (!state.session.isSpectator) {
           voice.setAllMuted(!!state.grimoire.isNight);
+          // keep the shared phase in step (dusk is only left by going to night)
+          if (state.grimoire.isNight) voice.setPhase("night");
+          else if (voice.state.phase === "night") voice.setPhase("day");
         }
         break;
       case "setEdition":

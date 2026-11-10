@@ -158,7 +158,7 @@
                   {{
                     voice.micOn
                       ? "On"
-                      : voice.allMuted && !voice.isHost
+                      : (voice.allMuted && !voice.isHost) || voice.lockedMute
                       ? "Muted by ST"
                       : "Muted"
                   }}

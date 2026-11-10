@@ -34,13 +34,15 @@ function loadRnnoisePref() {
 }
 
 const GATE_KEY = "botcNoiseGate";
+const DEFAULT_GATE = 80; // noise gate strength until the player picks their own
 const BROWSER_NS_KEY = "botcBrowserNs";
 
 function loadGatePref() {
   try {
-    return parseInt(localStorage.getItem(GATE_KEY), 10) || 0;
+    const saved = localStorage.getItem(GATE_KEY);
+    return saved === null ? DEFAULT_GATE : parseInt(saved, 10) || 0;
   } catch (e) {
-    return 0;
+    return DEFAULT_GATE;
   }
 }
 
@@ -83,6 +85,16 @@ class VoiceChat {
       mutedIds: [], // playerIds currently muted (self-muted or muted by the Storyteller)
       handIds: [], // playerIds with a raised hand, including your own
       handUp: false, // your own hand is raised
+      phase: "day", // day | dusk | night, shared by the Storyteller
+      timerActive: false, // the chat timer is running (private chats allowed)
+      timerEnd: 0, // local clock time (ms) when the chat timer runs out
+      chats: [], // chats you may see: { id, num, whisper, members: [playerId], hidden: [playerId] }
+      busy: [], // playerIds in a private Storyteller chat, nobody outside can hear them
+      invisible: false, // Storyteller: sitting in a room unseen, mic locked off
+      mutedPlayers: [], // playerIds the Storyteller has muted one by one
+      lockedMute: false, // the Storyteller has muted you personally
+      incoming: [], // requests waiting for your answer
+      notice: null, // latest status of a request you made
       rnnoise: loadRnnoisePref(), // RNNoise noise suppression switched on
       rnnoiseStatus: "off", // off | loading | waiting | on | unsupported | error
       browserNs: loadBrowserNsPref(), // also use the browser's own noise filter
@@ -90,6 +102,10 @@ class VoiceChat {
     });
     this._mutedKey = "";
     this._handKey = "";
+    this._noticeTimer = null;
+    this._invisible = false;
+    this._micBefore = true;
+    this._wasWhisper = false;
     this._levelTimer = null;
     this._pollingLevels = false;
     this._busy = false;
@@ -187,7 +203,9 @@ class VoiceChat {
   toggleMic() {
     if (!this._track) return;
     // players can't unmute themselves while the Storyteller has everyone muted
-    if (this.state.allMuted && !this.state.isHost) return;
+    if (this.state.isHost && this.state.invisible) return;
+    if (!this.state.isHost && this.state.lockedMute) return;
+    if (this.state.allMuted && !this.state.isHost && !this._inWhisper()) return;
     this._setMic(!this._track.enabled);
   }
 
@@ -195,6 +213,7 @@ class VoiceChat {
   _setMic(on) {
     if (!this._track) return;
     this._track.enabled = on;
+    if (this._rawTrack) this._rawTrack.enabled = on;
     this.state.micOn = on;
     this._send({ type: "mic", on });
     this._refreshMuted();
@@ -231,6 +250,112 @@ class VoiceChat {
     }
   }
 
+  // Changes your own mic without telling anyone (used for private chats, so
+  // other players can't tell who the Storyteller has pulled aside).
+  _setMicQuiet(on) {
+    if (!this._track) return;
+    this._track.enabled = on;
+    if (this._rawTrack) this._rawTrack.enabled = on;
+    this.state.micOn = on;
+    this._refreshMuted();
+  }
+
+  _inWhisper() {
+    const mine = this.chatOf(this._playerId);
+    return !!(mine && mine.whisper);
+  }
+
+  // the people you can see a mute-all exemption for: nobody, unless you share a private Storyteller chat
+  _sameWhisper(c) {
+    const mine = this.chatOf(this._playerId);
+    const theirs = this.chatOf(c.playerId);
+    return !!(mine && mine.whisper && theirs && theirs.id === mine.id);
+  }
+
+  _forced(c) {
+    if (c.isHost) return false;
+    return (
+      this.state.mutedPlayers.includes(c.playerId) ||
+      (this.state.allMuted && !this._sameWhisper(c))
+    );
+  }
+
+  // Storyteller only: mute or unmute one player.
+  setPlayerMuted(playerId, on) {
+    if (!this.state.isHost || !playerId) return;
+    this._applyPlayerMuted(playerId, !!on);
+    this._send({ type: "mute-player", playerId, on: !!on });
+  }
+
+  _applyPlayerMuted(playerId, on) {
+    const list = this.state.mutedPlayers.filter(id => id !== playerId);
+    if (on) list.push(playerId);
+    this.state.mutedPlayers = list;
+    if (playerId === this._playerId && !this.state.isHost) this._applyLocked();
+    this._syncAllAudio();
+    this._refreshMuted();
+  }
+
+  // Your own mic follows a personal mute from the Storyteller.
+  _applyLocked() {
+    const locked = this.state.mutedPlayers.includes(this._playerId);
+    if (locked === this.state.lockedMute) return;
+    this.state.lockedMute = locked;
+    if (!this._track || this.state.isHost) return;
+    if (locked) this._setMic(false);
+    else if (!this.state.allMuted) this._setMic(true);
+    else this._setMicQuiet(this._inWhisper());
+  }
+
+  // Runs whenever the list of chats changes.
+  _onChatsChanged() {
+    const mine = this.chatOf(this._playerId);
+    if (this.state.isHost) {
+      // coming out of a private chat: mute so nothing slips out to the table
+      const inWhisper = !!(mine && mine.whisper);
+      if (this._wasWhisper && !inWhisper && !this.state.invisible) {
+        this._setMic(false);
+      }
+      this._wasWhisper = inWhisper;
+      const hidden = !!(mine && mine.hidden && mine.hidden.includes(this._playerId));
+      if (hidden && !this._invisible) {
+        this._invisible = true;
+        this._micBefore = this.state.micOn;
+        this._setMicQuiet(false);
+      } else if (!hidden && this._invisible) {
+        this._invisible = false;
+        this._setMicQuiet(this._micBefore);
+      }
+      this.state.invisible = hidden;
+    } else if (this.state.allMuted && this._track) {
+      // while everyone is muted, only people in a Storyteller chat can talk
+      this._setMicQuiet(!!(mine && mine.whisper) && !this.state.lockedMute);
+    }
+    this._syncAllAudio();
+    this._refreshMuted();
+  }
+
+  // Storyteller only
+  joinChat(chatId, hidden) {
+    if (!this.state.isHost) return;
+    this._send({ type: "chat-join", chatId, hidden: !!hidden });
+  }
+
+  whisper(playerId) {
+    if (!this.state.isHost || !playerId) return;
+    this._send({ type: "whisper-start", to: playerId });
+  }
+
+  endWhisper() {
+    if (!this.state.isHost) return;
+    this._send({ type: "whisper-end" });
+  }
+
+  // Players: ask the Storyteller for a private chat, in any phase
+  requestStoryteller() {
+    this._send({ type: "chat-request", kind: "st" });
+  }
+
   // Works out which playerIds are muted, for the muted icon by each nameplate.
   _refreshMuted() {
     const muted = [];
@@ -239,8 +364,7 @@ class VoiceChat {
       if (!c.playerId) continue;
       const peer = this.state.peers.find(p => p.id === id);
       const selfMuted = peer && peer.micOn === false;
-      const forced = this.state.allMuted && !c.isHost;
-      if (selfMuted || forced) muted.push(c.playerId);
+      if (selfMuted || this._forced(c)) muted.push(c.playerId);
     }
     const key = muted.join(",");
     if (key !== this._mutedKey) {
@@ -280,7 +404,11 @@ class VoiceChat {
     on = !!on;
     this.state.allMuted = on;
     // players' mics follow the Storyteller's toggle; the Storyteller is exempt
-    if (!this.state.isHost && this._track) this._setMic(!on);
+    if (!this.state.isHost && this._track) {
+      if (this.state.lockedMute) this._setMic(false);
+      else if (on && this._inWhisper()) this._setMicQuiet(true);
+      else this._setMic(!on);
+    }
     // also silence incoming audio from muted players, so it holds even if
     // someone's client ignores the mute
     for (const id of this._conns.keys()) this._syncAudio(id);
@@ -292,7 +420,87 @@ class VoiceChat {
     if (!c) return;
     const peer = this.state.peers.find(p => p.id === id);
     const hear = peer ? peer.hear : true;
-    c.audio.muted = !hear || (this.state.allMuted && !c.isHost);
+    c.audio.muted =
+      !hear || this._forced(c) || !this._audible(c);
+  }
+
+  // Private chats: inside a chat you only hear the people in it, and outside
+  // of one you only hear people who are not in a chat.
+  _audible(c) {
+    const mine = this.chatOf(this._playerId);
+    const theirs = this.chatOf(c.playerId);
+    if (mine) return !!theirs && theirs.id === mine.id;
+    if (theirs) return false;
+    return !this.state.busy.includes(c.playerId);
+  }
+
+  chatOf(playerId) {
+    if (!playerId) return null;
+    return this.state.chats.find(c => c.members.includes(playerId)) || null;
+  }
+
+  _syncAllAudio() {
+    for (const id of this._conns.keys()) this._syncAudio(id);
+  }
+
+  // ---- phase, chat timer and private chats ----
+
+  // Storyteller only: day, dusk or night. Ends the chat timer and any private chats.
+  setPhase(phase) {
+    if (!this.state.isHost || !["day", "dusk", "night"].includes(phase)) return;
+    this.state.phase = phase;
+    if (this.state.timerActive) this._setTimer(0);
+    this._send({ type: "phase", phase });
+  }
+
+  startTimer(seconds) {
+    if (!this.state.isHost || this.state.phase !== "day") return;
+    this._send({ type: "timer-start", seconds });
+  }
+
+  stopTimer() {
+    if (!this.state.isHost) return;
+    this._send({ type: "timer-stop" });
+  }
+
+  _setTimer(leftMs) {
+    this.state.timerActive = leftMs > 0;
+    this.state.timerEnd = leftMs > 0 ? Date.now() + leftMs : 0;
+    if (leftMs <= 0) {
+      // rooms are closed by the server; requests for a chat with the Storyteller stay
+      this.state.incoming = this.state.incoming.filter(r => r.kind === "st");
+    }
+  }
+
+  requestChat(playerId) {
+    this._send({ type: "chat-request", kind: "new", to: playerId });
+  }
+
+  invite(playerId) {
+    this._send({ type: "chat-request", kind: "invite", to: playerId });
+  }
+
+  requestJoin(chatId) {
+    this._send({ type: "chat-request", kind: "join", chatId });
+  }
+
+  respond(id, answer) {
+    this._send({ type: "chat-respond", id, answer });
+    this.state.incoming = this.state.incoming.filter(r => r.id !== id);
+  }
+
+  leaveChat() {
+    const mine = this.chatOf(this._playerId);
+    if (mine && mine.locked && !this.state.isHost) return;
+    this._send({ type: "chat-leave" });
+  }
+
+  _setNotice(notice) {
+    clearTimeout(this._noticeTimer);
+    this.state.notice = notice;
+    if (notice) {
+      this._noticeTimer = setTimeout(() => (this.state.notice = null), 7000);
+    }
   }
 
   // "Hear" mutes a player locally; "Talk" stops sending your mic to them (whispering).
@@ -338,6 +546,12 @@ class VoiceChat {
       this._teardown(msg.message);
     } else if (msg.type === "welcome") {
       this.state.joined = true;
+      this.state.phase = msg.phase || "day";
+      this.state.chats = msg.chats || [];
+      this.state.busy = msg.busy || [];
+      this.state.mutedPlayers = msg.mutedPlayers || [];
+      this._applyLocked();
+      this._setTimer(msg.timerLeft || 0);
       if (this.state.isHost) {
         // keep a mute the Storyteller set before the connection opened, or adopt the room's
         this.state.allMuted = this.state.allMuted || !!msg.allMuted;
@@ -363,6 +577,26 @@ class VoiceChat {
     } else if (msg.type === "peer-mic") {
       this._patch(msg.id, { micOn: !!msg.on });
       this._refreshMuted();
+    } else if (msg.type === "phase") {
+      this.state.phase = msg.phase;
+      this._setTimer(0);
+    } else if (msg.type === "timer") {
+      this._setTimer(msg.left || 0);
+    } else if (msg.type === "player-muted") {
+      this._applyPlayerMuted(msg.playerId, !!msg.on);
+    } else if (msg.type === "chats") {
+      this.state.chats = msg.chats;
+      this.state.busy = msg.busy || [];
+      this._onChatsChanged();
+    } else if (msg.type === "chat-request") {
+      this.state.incoming = [
+        ...this.state.incoming.filter(r => r.id !== msg.id),
+        { id: msg.id, kind: msg.kind, from: msg.from, chatId: msg.chatId, num: msg.num }
+      ];
+    } else if (msg.type === "chat-cancel") {
+      this.state.incoming = this.state.incoming.filter(r => r.id !== msg.id);
+    } else if (msg.type === "chat-status") {
+      this._setNotice({ id: msg.id, status: msg.status, who: msg.who, num: msg.num });
     } else if (msg.type === "lower-hand") {
       if (msg.playerId && msg.playerId === this._playerId && this.state.handUp) {
         this.setHand(false);
@@ -463,6 +697,7 @@ class VoiceChat {
     ];
     this._refreshMuted();
     this._refreshHands();
+    this._syncAudio(id);
     return conn;
   }
 
@@ -661,6 +896,7 @@ class VoiceChat {
   _setOutgoing(track) {
     if (!track || track === this._track) return;
     track.enabled = this.state.micOn;
+    if (this._rawTrack) this._rawTrack.enabled = this.state.micOn;
     this._track = track;
     for (const [id, c] of this._conns) {
       const peer = this.state.peers.find(p => p.id === id);
@@ -714,7 +950,7 @@ class VoiceChat {
       if (peerLevel >= SPEAKING_LEVEL) c.lastLoud = now;
       const isSpeaking = now - c.lastLoud < SPEAKING_HOLD_MS;
       this._patch(id, { speaking: isSpeaking });
-      if (isSpeaking && c.playerId) speaking.push(c.playerId);
+      if (isSpeaking && c.playerId && this._audible(c)) speaking.push(c.playerId);
     }
     const key = speaking.join(",");
     if (key !== this._speakingKey) {
@@ -814,6 +1050,18 @@ class VoiceChat {
     this._mutedKey = "";
     this.state.handIds = [];
     this.state.handUp = false;
+    this.state.phase = "day";
+    this.state.timerActive = false;
+    this.state.timerEnd = 0;
+    this.state.chats = [];
+    this.state.busy = [];
+    this.state.mutedPlayers = [];
+    this.state.lockedMute = false;
+    this.state.invisible = false;
+    this._invisible = false;
+    this._wasWhisper = false;
+    this.state.incoming = [];
+    this.state.notice = null;
     this._handKey = "";
     this.state.rnnoiseStatus = "off";
     this.state.error = error || "";

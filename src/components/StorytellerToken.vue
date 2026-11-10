@@ -1,6 +1,10 @@
 <template>
   <div class="storyteller" :class="{ speaking }">
-    <div class="st-token">
+    <div
+      class="st-token"
+      :class="{ clickable: canRename || canRequest }"
+      @click="toggleTokenMenu"
+    >
       <font-awesome-icon icon="theater-masks" />
       <div class="speaking-ring"></div>
     </div>
@@ -37,6 +41,40 @@
     >
       {{ voice.allMuted ? "Unmute all" : "Mute all" }}
     </div>
+    <!-- Storyteller only: phase and chat timer -->
+    <transition name="fold">
+      <ul class="st-menu st-token-menu" v-if="isTokenMenuOpen && canRename">
+        <li class="headline">Set phase</li>
+        <li
+          v-for="p in phases"
+          :key="p.id"
+          :class="{ current: voice.phase === p.id }"
+          @click="setPhase(p.id)"
+        >
+          <font-awesome-icon :icon="p.icon" />{{ p.label }}
+          <em v-if="voice.phase === p.id">(current)</em>
+        </li>
+        <li class="headline">Chat timer</li>
+        <li v-if="voice.timerActive" @click="stopTimer">
+          <font-awesome-icon icon="clock" />Stop chat timer
+        </li>
+        <li
+          v-else
+          @click="startTimer"
+          :class="{ disabled: voice.phase !== 'day' || !voice.joined }"
+        >
+          <font-awesome-icon icon="clock" />Start chat timer
+        </li>
+      </ul>
+    </transition>
+    <!-- Players: ask the Storyteller for a private chat -->
+    <transition name="fold">
+      <ul class="st-menu st-token-menu" v-if="isTokenMenuOpen && canRequest">
+        <li @click="requestChat">
+          <font-awesome-icon icon="comments" />Request chat
+        </li>
+      </ul>
+    </transition>
     <transition name="fold">
       <ul class="st-menu" v-if="isMenuOpen && (canAdjust || canRename)">
         <li v-if="canRename" @click="setName">
@@ -68,6 +106,12 @@ export default {
   data() {
     return {
       isMenuOpen: false,
+      isTokenMenuOpen: false,
+      phases: [
+        { id: "day", label: "Day", icon: "sun" },
+        { id: "dusk", label: "Dusk", icon: "cloud-sun" },
+        { id: "night", label: "Night", icon: "moon" }
+      ],
       voice: voice.state
     };
   },
@@ -79,6 +123,15 @@ export default {
     // players can adjust how loud the Storyteller is for them
     canAdjust() {
       return this.voice.joined && this.session.isSpectator && !!this.hostId;
+    },
+    // players can ask the Storyteller for a private chat, if not already in one
+    canRequest() {
+      return (
+        this.session.isSpectator &&
+        this.voice.joined &&
+        !!this.hostId &&
+        !voice.chatOf(this.session.playerId)
+      );
     },
     // only the Storyteller can rename and mute everyone
     canRename() {
@@ -106,7 +159,38 @@ export default {
   },
   methods: {
     toggleMenu() {
+      this.isTokenMenuOpen = false;
       if (this.canAdjust || this.canRename) this.isMenuOpen = !this.isMenuOpen;
+    },
+    requestChat() {
+      this.isTokenMenuOpen = false;
+      voice.requestStoryteller();
+    },
+    toggleTokenMenu() {
+      if (!this.canRename && !this.canRequest) return;
+      this.isMenuOpen = false;
+      this.isTokenMenuOpen = !this.isTokenMenuOpen;
+    },
+    // Switches the shared phase, and the grimoire's night flag to match
+    setPhase(phase) {
+      this.isTokenMenuOpen = false;
+      voice.setPhase(phase);
+      const night = phase === "night";
+      if (!!this.$store.state.grimoire.isNight !== night) {
+        this.$store.commit("toggleNight", night);
+        if (night) this.$store.commit("session/setMarkedPlayer", -1);
+      }
+    },
+    startTimer() {
+      if (this.voice.phase !== "day" || !this.voice.joined) return;
+      this.isTokenMenuOpen = false;
+      const input = prompt("Chat timer length in minutes", "5");
+      const minutes = parseFloat(input);
+      if (minutes > 0) voice.startTimer(minutes * 60);
+    },
+    stopTimer() {
+      this.isTokenMenuOpen = false;
+      voice.stopTimer();
     },
     setName() {
       this.isMenuOpen = false;
@@ -152,6 +236,13 @@ export default {
     justify-content: center;
     pointer-events: none;
     cursor: default;
+    &.clickable {
+      pointer-events: auto;
+      cursor: pointer;
+      &:hover {
+        filter: brightness(1.2);
+      }
+    }
     color: black;
     font-size: 4.5vh;
     &:before {
@@ -270,6 +361,31 @@ export default {
     border: 3px solid #000;
     box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
     z-index: 30;
+
+    &.st-token-menu {
+      left: 115%;
+      top: 0;
+      margin-top: 0;
+      li.headline {
+        cursor: default;
+        text-align: center;
+        opacity: 0.7;
+        font-size: 85%;
+        &:hover {
+          color: inherit;
+        }
+      }
+      li.current {
+        color: #3ddc84;
+      }
+      li.disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+        &:hover {
+          color: inherit;
+        }
+      }
+    }
 
     li {
       cursor: pointer;

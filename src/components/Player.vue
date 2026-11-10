@@ -144,6 +144,14 @@
             <li @click="addRoleIcon">
               <font-awesome-icon icon="theater-masks" />Select role
             </li>
+            <li @click="toggleMutePlayer" v-if="player.id && voice.joined">
+              <font-awesome-icon
+                :icon="playerMuted ? 'microphone' : 'microphone-slash'"
+              />{{ playerMuted ? "Unmute player" : "Mute player" }}
+            </li>
+            <li @click="startWhisper" v-if="canWhisper">
+              <font-awesome-icon icon="comments" />Private chat
+            </li>
             <li @click="lowerHand" v-if="handUp">
               <font-awesome-icon icon="hand-paper" />Lower hand
             </li>
@@ -154,9 +162,25 @@
               <font-awesome-icon icon="hand-point-right" />Nomination
             </li>
           </template>
-          <li @click="addRoleIcon" v-else>
-            <font-awesome-icon icon="theater-masks" />Add Role Icon
-          </li>
+          <template v-else>
+            <li @click="addRoleIcon" v-if="!isTraveler">
+              <font-awesome-icon icon="theater-masks" />Add Role Icon
+            </li>
+            <li @click="claimSeat" v-if="!player.id">
+              <font-awesome-icon icon="chair" />Claim seat
+            </li>
+            <li @click="requestChat" v-if="canRequestChat">
+              <font-awesome-icon icon="comments" />Request chat
+            </li>
+            <li @click="inviteChat" v-if="canInvite">
+              <font-awesome-icon icon="comments" />Invite to Room
+              {{ myChat.num }}
+            </li>
+            <li @click="requestJoin" v-if="canJoin">
+              <font-awesome-icon icon="comments" />Request to join Room
+              {{ theirChat.num }}
+            </li>
+          </template>
         </ul>
       </transition>
 
@@ -293,6 +317,60 @@ export default {
         this.player.id === this.session.playerId
       );
     },
+    // the Storyteller can pull a seated player into a private chat, in any phase
+    canWhisper: function() {
+      return (
+        !this.session.isSpectator &&
+        this.voice.joined &&
+        !!this.player.id &&
+        !(this.myChat && this.theirChat && this.myChat.id === this.theirChat.id)
+      );
+    },
+    playerMuted: function() {
+      return !!this.player.id && this.voice.mutedPlayers.includes(this.player.id);
+    },
+    isTraveler: function() {
+      return !!this.player.role && this.player.role.team === "traveler";
+    },
+    // private chats, only while the Storyteller's chat timer is running
+    myChat: function() {
+      return voice.chatOf(this.session.playerId);
+    },
+    theirChat: function() {
+      return voice.chatOf(this.player.id);
+    },
+    chatTarget: function() {
+      return (
+        this.session.isSpectator &&
+        this.voice.joined &&
+        this.voice.timerActive &&
+        !!this.player.id &&
+        !this.isYou
+      );
+    },
+    canRequestChat: function() {
+      return this.chatTarget && !this.myChat && !this.theirChat;
+    },
+    canInvite: function() {
+      return (
+        this.chatTarget &&
+        !!this.myChat &&
+        !this.myChat.whisper &&
+        !this.theirChat
+      );
+    },
+    canJoin: function() {
+      return this.chatTarget && !this.myChat && !!this.theirChat;
+    },
+    hasTokenMenu: function() {
+      return (
+        !this.isTraveler ||
+        !this.player.id ||
+        this.canRequestChat ||
+        this.canInvite ||
+        this.canJoin
+      );
+    },
     handUp: function() {
       return !!this.player.id && this.voice.handIds.includes(this.player.id);
     },
@@ -310,7 +388,7 @@ export default {
     },
     // the Storyteller has everyone muted, so players can't unmute themselves
     micLocked: function() {
-      return this.voice.allMuted && !this.voice.isHost;
+      return (this.voice.allMuted && !this.voice.isHost) || this.voice.lockedMute;
     },
     micTitle: function() {
       if (!this.isYou) {
@@ -333,15 +411,13 @@ export default {
     },
     zoom: function() {
       const unit = window.innerWidth > window.innerHeight ? "vh" : "vw";
-      if (this.players.length < 7) {
-        return { width: 18 + this.grimoire.zoom + unit };
-      } else if (this.players.length <= 10) {
-        return { width: 16 + this.grimoire.zoom + unit };
-      } else if (this.players.length <= 15) {
-        return { width: 14 + this.grimoire.zoom + unit };
-      } else {
-        return { width: 12 + this.grimoire.zoom + unit };
-      }
+      // a little smaller in a live session, to make room for the phase bar
+      const shrink = this.session.sessionId ? 1.5 : 0;
+      let base = 12;
+      if (this.players.length < 7) base = 18;
+      else if (this.players.length <= 10) base = 16;
+      else if (this.players.length <= 15) base = 14;
+      return { width: base - shrink + this.grimoire.zoom + unit };
     }
   },
   data() {
@@ -431,8 +507,13 @@ export default {
     cancel() {
       this.$emit("trigger", ["cancel"]);
     },
+    toggleMutePlayer() {
+      this.isTokenMenuOpen = false;
+      voice.setPlayerMuted(this.player.id, !this.playerMuted);
+    },
     claimSeat() {
       this.isMenuOpen = false;
+      this.isTokenMenuOpen = false;
       this.$emit("trigger", ["claimSeat"]);
     },
     toggleMic() {
@@ -447,7 +528,7 @@ export default {
       } else if (this.isYou) {
         this.isTokenMenuOpen = false;
         voice.toggleHand();
-      } else if (this.player.role && this.player.role.team === "traveler") {
+      } else if (!this.hasTokenMenu) {
         return;
       } else {
         this.isMenuOpen = false;
@@ -457,6 +538,22 @@ export default {
     lowerHand() {
       this.isTokenMenuOpen = false;
       voice.lowerHand(this.player.id);
+    },
+    startWhisper() {
+      this.isTokenMenuOpen = false;
+      voice.whisper(this.player.id);
+    },
+    requestChat() {
+      this.isTokenMenuOpen = false;
+      voice.requestChat(this.player.id);
+    },
+    inviteChat() {
+      this.isTokenMenuOpen = false;
+      voice.invite(this.player.id);
+    },
+    requestJoin() {
+      this.isTokenMenuOpen = false;
+      if (this.theirChat) voice.requestJoin(this.theirChat.id);
     },
     removeMark() {
       this.isTokenMenuOpen = false;

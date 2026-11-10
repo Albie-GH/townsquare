@@ -10,6 +10,9 @@
       'st-host': session.sessionId && !session.isSpectator
     }"
   >
+    <PhaseBar v-if="session.sessionId"></PhaseBar>
+    <ChatRooms v-if="session.sessionId"></ChatRooms>
+    <ChatPrompts v-if="session.sessionId"></ChatPrompts>
     <StorytellerToken v-if="session.sessionId"></StorytellerToken>
     <ul class="circle" :class="['size-' + players.length]">
       <Player
@@ -96,10 +99,16 @@ import Token from "./Token";
 import ReminderModal from "./modals/ReminderModal";
 import RoleModal from "./modals/RoleModal";
 import StorytellerToken from "./StorytellerToken";
+import PhaseBar from "./PhaseBar";
+import ChatRooms from "./ChatRooms";
+import ChatPrompts from "./ChatPrompts";
 
 export default {
   components: {
     StorytellerToken,
+    PhaseBar,
+    ChatRooms,
+    ChatPrompts,
     Player,
     Token,
     RoleModal,
@@ -285,6 +294,11 @@ export default {
   align-items: center;
   align-content: center;
   justify-content: center;
+}
+
+// leave room at the top for the phase / chat timer bar
+#townsquare.has-st {
+  padding-top: 64px;
 }
 
 .circle {
