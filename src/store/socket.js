@@ -869,6 +869,20 @@ export default store => {
   // setup
   const session = new LiveSession(store);
 
+  // The Storyteller sent you the demon bluffs: fill the Other Characters tray
+  voice.onBluffs = roles => {
+    store.commit("players/setBluff");
+    for (let i = 0; i < 3; i++) {
+      const sent = roles[i];
+      const role = sent
+        ? store.state.roles.get(sent.id) ||
+          store.getters.rolesJSONbyId.get(sent.id) ||
+          (sent.isCustom ? sent : {})
+        : {};
+      store.commit("players/setBluff", { index: i, role });
+    }
+  };
+
   // Voice starts automatically with the live session
   const joinVoice = ({ session: { sessionId, isSpectator, playerId } }) => {
     voice.join(

@@ -1,13 +1,5 @@
 <template>
   <div class="chat-prompts" v-if="voice.joined">
-    <div class="prompt whisper" v-if="whisper">
-      <div class="text">{{ whisperText }}</div>
-      <div class="buttons" v-if="voice.isHost || !whisper.locked">
-        <div class="button demon" @click="endWhisper">
-          {{ voice.isHost ? "End chat" : "Leave chat" }}
-        </div>
-      </div>
-    </div>
     <div class="prompt notice" v-if="noticeText">{{ noticeText }}</div>
     <div class="prompt" v-for="req in voice.incoming" :key="req.id">
       <div class="text">{{ text(req) }}</div>

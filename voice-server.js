@@ -365,6 +365,16 @@ wss.on("connection", ws => {
       broadcastChats(room);
     }
 
+    if (msg.type === "send-bluffs" && room) {
+      // Storyteller: give the demon their bluffs
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (me && me.isHost && Array.isArray(msg.roles)) {
+        const roles = msg.roles.slice(0, 3).map(r => (r && typeof r === "object" ? r : null));
+        sendTo(room, String(msg.to || "").slice(0, 40), { type: "bluffs", roles });
+      }
+    }
+
     if (msg.type === "mute-player" && room) {
       // Storyteller: mute one player, who can't unmute themselves until the Storyteller does
       const members = rooms.get(room);

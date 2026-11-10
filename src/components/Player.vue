@@ -149,6 +149,9 @@
                 :icon="playerMuted ? 'microphone' : 'microphone-slash'"
               />{{ playerMuted ? "Unmute player" : "Mute player" }}
             </li>
+            <li @click="sendBluffs" v-if="canSendBluffs">
+              <font-awesome-icon icon="theater-masks" />Send Demon Bluffs
+            </li>
             <li @click="startWhisper" v-if="canWhisper">
               <font-awesome-icon icon="comments" />Private chat
             </li>
@@ -164,7 +167,7 @@
           </template>
           <template v-else>
             <li @click="addRoleIcon" v-if="!isTraveler">
-              <font-awesome-icon icon="theater-masks" />Add Role Icon
+              <font-awesome-icon icon="theater-masks" />Add Possible Role
             </li>
             <li @click="claimSeat" v-if="!player.id">
               <font-awesome-icon icon="chair" />Claim seat
@@ -299,7 +302,7 @@ export default {
     }
   },
   computed: {
-    ...mapState("players", ["players"]),
+    ...mapState("players", ["players", "bluffs"]),
     ...mapState(["grimoire", "session"]),
     ...mapGetters({ nightOrder: "players/nightOrder" }),
     index: function() {
@@ -324,6 +327,17 @@ export default {
         this.voice.joined &&
         !!this.player.id &&
         !(this.myChat && this.theirChat && this.myChat.id === this.theirChat.id)
+      );
+    },
+    // the Storyteller can hand the demon the bluffs they have set
+    canSendBluffs: function() {
+      return (
+        !this.session.isSpectator &&
+        this.voice.joined &&
+        !!this.player.id &&
+        !!this.player.role &&
+        this.player.role.team === "demon" &&
+        this.bluffs.some(r => r && r.id)
       );
     },
     playerMuted: function() {
@@ -538,6 +552,15 @@ export default {
     lowerHand() {
       this.isTokenMenuOpen = false;
       voice.lowerHand(this.player.id);
+    },
+    sendBluffs() {
+      this.isTokenMenuOpen = false;
+      const roles = [0, 1, 2].map(i => {
+        const role = this.bluffs[i];
+        if (!role || !role.id) return null;
+        return role.isCustom ? role : { id: role.id };
+      });
+      voice.sendBluffs(this.player.id, roles);
     },
     startWhisper() {
       this.isTokenMenuOpen = false;

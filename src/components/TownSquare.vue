@@ -99,6 +99,7 @@ import Token from "./Token";
 import ReminderModal from "./modals/ReminderModal";
 import RoleModal from "./modals/RoleModal";
 import StorytellerToken from "./StorytellerToken";
+import voice from "../voice";
 import PhaseBar from "./PhaseBar";
 import ChatRooms from "./ChatRooms";
 import ChatPrompts from "./ChatPrompts";
@@ -119,14 +120,21 @@ export default {
     ...mapState(["grimoire", "roles", "session"]),
     ...mapState("players", ["players", "bluffs", "fabled"])
   },
+  watch: {
+    // the Storyteller sent you the demon bluffs: open the tray
+    "voice.bluffsPulse"() {
+      this.isBluffsOpen = true;
+    }
+  },
   data() {
     return {
+      voice: voice.state,
       selectedPlayer: 0,
       bluffSize: 3,
       swap: -1,
       move: -1,
       nominate: -1,
-      isBluffsOpen: true,
+      isBluffsOpen: false,
       isFabledOpen: true
     };
   },

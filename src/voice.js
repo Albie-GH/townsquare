@@ -93,6 +93,7 @@ class VoiceChat {
       invisible: false, // Storyteller: sitting in a room unseen, mic locked off
       mutedPlayers: [], // playerIds the Storyteller has muted one by one
       lockedMute: false, // the Storyteller has muted you personally
+      bluffsPulse: 0, // goes up each time the Storyteller sends you demon bluffs
       incoming: [], // requests waiting for your answer
       notice: null, // latest status of a request you made
       rnnoise: loadRnnoisePref(), // RNNoise noise suppression switched on
@@ -106,6 +107,7 @@ class VoiceChat {
     this._invisible = false;
     this._micBefore = true;
     this._wasWhisper = false;
+    this.onBluffs = null; // set by socket.js, stores the bluffs you were sent
     this._levelTimer = null;
     this._pollingLevels = false;
     this._busy = false;
@@ -333,6 +335,12 @@ class VoiceChat {
     }
     this._syncAllAudio();
     this._refreshMuted();
+  }
+
+  // Storyteller only: send the three demon bluffs to the demon's Other Characters tray
+  sendBluffs(playerId, roles) {
+    if (!this.state.isHost || !playerId) return;
+    this._send({ type: "send-bluffs", to: playerId, roles });
   }
 
   // Storyteller only
@@ -582,6 +590,9 @@ class VoiceChat {
       this._setTimer(0);
     } else if (msg.type === "timer") {
       this._setTimer(msg.left || 0);
+    } else if (msg.type === "bluffs") {
+      if (this.onBluffs) this.onBluffs(msg.roles || []);
+      this.state.bluffsPulse++;
     } else if (msg.type === "player-muted") {
       this._applyPlayerMuted(msg.playerId, !!msg.on);
     } else if (msg.type === "chats") {

@@ -1,6 +1,36 @@
 <template>
-  <div class="chat-rooms" v-if="voice.joined && rooms.length">
+  <div class="chat-rooms" v-if="voice.joined && (rooms.length || stRoom)">
     <h4>Private chats</h4>
+    <!-- only the people in a private Storyteller chat ever see this -->
+    <div
+      class="room st-room mine"
+      v-if="stRoom"
+      :class="{ open: openId === stRoom.id }"
+      @click="toggle(stRoom)"
+    >
+      <div class="title">
+        Storyteller Room
+        <small>only you can see this</small>
+      </div>
+      <ul class="members">
+        <li
+          v-for="id in stRoom.members"
+          :key="id"
+          :class="{ speaking: voice.speakingIds.includes(id) }"
+        >
+          {{ nameOf(id) }}
+        </li>
+      </ul>
+      <div class="action" v-if="openId === stRoom.id">
+        <span v-if="voice.isHost" @click.stop="endStRoom">
+          <font-awesome-icon icon="sign-out-alt" /> End chat
+        </span>
+        <span v-else-if="!stRoom.locked" @click.stop="leave">
+          <font-awesome-icon icon="sign-out-alt" /> Leave chat
+        </span>
+        <span class="muted" v-else>The Storyteller ends this chat</span>
+      </div>
+    </div>
     <div
       class="room"
       v-for="chat in rooms"
@@ -58,6 +88,10 @@ export default {
     rooms() {
       return this.voice.chats.filter(c => !c.whisper);
     },
+    // your private chat with the Storyteller, if you are in one
+    stRoom() {
+      return this.myChat && this.myChat.whisper ? this.myChat : null;
+    },
     canJoin() {
       return (
         this.$store.state.session.isSpectator &&
@@ -73,6 +107,10 @@ export default {
     },
     toggle(chat) {
       this.openId = this.openId === chat.id ? 0 : chat.id;
+    },
+    endStRoom() {
+      this.openId = 0;
+      voice.endWhisper();
     },
     leave() {
       this.openId = 0;
