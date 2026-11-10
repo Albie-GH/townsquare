@@ -11,7 +11,8 @@
           you: session.sessionId && player.id && player.id === session.playerId,
           'vote-yes': session.votes[index],
           'vote-lock': voteLocked,
-          speaking
+          speaking,
+          'has-mic': showMic
         },
         player.role.team
       ]"
@@ -122,13 +123,13 @@
       <!-- Your own mute toggle, only on your seat -->
       <div
         class="mic-toggle"
-        v-if="isYou && voice.joined"
-        :class="{ muted: !voice.micOn, locked: micLocked }"
+        v-if="showMic"
+        :class="{ muted: isMuted, locked: micLocked && isYou, readonly: !isYou }"
         :title="micTitle"
-        @click.stop="toggleMic"
+        @click.stop="isYou && toggleMic()"
       >
         <font-awesome-icon
-          :icon="voice.micOn ? 'microphone' : 'microphone-slash'"
+          :icon="isMuted ? 'microphone-slash' : 'microphone'"
         />
       </div>
 
@@ -271,11 +272,26 @@ export default {
         this.player.id === this.session.playerId
       );
     },
+    isMuted: function() {
+      return !!this.player.id && this.voice.mutedIds.includes(this.player.id);
+    },
+    // your own seat always shows the toggle; other seats only show it while muted
+    showMic: function() {
+      return (
+        !!this.session.sessionId &&
+        this.voice.joined &&
+        !!this.player.id &&
+        (this.isYou || this.isMuted)
+      );
+    },
     // the Storyteller has everyone muted, so players can't unmute themselves
     micLocked: function() {
       return this.voice.allMuted && !this.voice.isHost;
     },
     micTitle: function() {
+      if (!this.isYou) {
+        return this.voice.allMuted ? "Muted by the Storyteller" : "Muted";
+      }
       if (this.micLocked) return "Muted by the Storyteller";
       return this.voice.micOn ? "Mute yourself" : "Unmute yourself";
     },
@@ -866,12 +882,12 @@ li.move:not(.from) .player .overlay svg.move {
   opacity: 1;
 }
 
-/***** Own mute toggle, next to the nameplate *****/
+/***** Mute toggle, down by the nameplate on the same side as the menu *****/
 .player .mic-toggle {
   position: absolute;
-  top: 5px;
-  right: 110%;
-  margin-right: 8px;
+  bottom: -3px;
+  left: 110%;
+  margin-left: 6px;
   width: 30px;
   height: 30px;
   display: flex;
@@ -896,6 +912,15 @@ li.move:not(.from) .player .overlay svg.move {
       color: #ff6b6b;
     }
   }
+  // other players' icons just show their state
+  &.readonly {
+    cursor: default;
+    pointer-events: none;
+  }
+}
+// leave room for the mute icon when the menu opens
+.player.has-mic > .menu {
+  margin-left: 52px;
 }
 
 /***** Volume slider in the player menu *****/

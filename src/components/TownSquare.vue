@@ -346,6 +346,16 @@ export default {
         .fold-leave-to {
           transform: perspective(200px) rotateY(-90deg);
         }
+        // mute icon sits on the same side as the menu
+        .player > .mic-toggle {
+          left: auto;
+          right: 110%;
+          margin-left: 0;
+          margin-right: 6px;
+        }
+        .player.has-mic > .menu {
+          margin-right: 52px;
+        }
         // show ability tooltip on the left
         .ability {
           right: 120%;

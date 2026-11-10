@@ -44,8 +44,10 @@ class VoiceChat {
       hostPlayerId: "", // playerId of the storyteller in the voice room, if known
       hostName: loadHostName(), // the Storyteller's chosen name ("Storyteller" = none)
       isHost: false, // this client is the Storyteller
-      allMuted: false // the Storyteller has muted everyone (players can't unmute)
+      allMuted: false, // the Storyteller has muted everyone (players can't unmute)
+      mutedIds: [] // playerIds currently muted (self-muted or muted by the Storyteller)
     });
+    this._mutedKey = "";
     this._levelTimer = null;
     this._pollingLevels = false;
     this._busy = false;
@@ -138,8 +140,34 @@ class VoiceChat {
     if (!this._track) return;
     // players can't unmute themselves while the Storyteller has everyone muted
     if (this.state.allMuted && !this.state.isHost) return;
-    this._track.enabled = !this._track.enabled;
-    this.state.micOn = this._track.enabled;
+    this._setMic(!this._track.enabled);
+  }
+
+  // Turns your mic on or off, tells everyone else, and refreshes the muted list.
+  _setMic(on) {
+    if (!this._track) return;
+    this._track.enabled = on;
+    this.state.micOn = on;
+    this._send({ type: "mic", on });
+    this._refreshMuted();
+  }
+
+  // Works out which playerIds are muted, for the muted icon by each nameplate.
+  _refreshMuted() {
+    const muted = [];
+    if (this._playerId && !this.state.micOn) muted.push(this._playerId);
+    for (const [id, c] of this._conns) {
+      if (!c.playerId) continue;
+      const peer = this.state.peers.find(p => p.id === id);
+      const selfMuted = peer && peer.micOn === false;
+      const forced = this.state.allMuted && !c.isHost;
+      if (selfMuted || forced) muted.push(c.playerId);
+    }
+    const key = muted.join(",");
+    if (key !== this._mutedKey) {
+      this._mutedKey = key;
+      this.state.mutedIds = muted;
+    }
   }
 
   // Storyteller only: change the name shown on the Storyteller token for everyone.
@@ -173,13 +201,11 @@ class VoiceChat {
     on = !!on;
     this.state.allMuted = on;
     // players' mics follow the Storyteller's toggle; the Storyteller is exempt
-    if (!this.state.isHost && this._track) {
-      this._track.enabled = !on;
-      this.state.micOn = !on;
-    }
+    if (!this.state.isHost && this._track) this._setMic(!on);
     // also silence incoming audio from muted players, so it holds even if
     // someone's client ignores the mute
     for (const id of this._conns.keys()) this._syncAudio(id);
+    this._refreshMuted();
   }
 
   _syncAudio(id) {
@@ -255,6 +281,9 @@ class VoiceChat {
       this._names.set(msg.id, msg);
     } else if (msg.type === "mute-all") {
       this._applyAllMuted(msg.on);
+    } else if (msg.type === "peer-mic") {
+      this._patch(msg.id, { micOn: !!msg.on });
+      this._refreshMuted();
     } else if (msg.type === "peer-renamed") {
       const known = this._names.get(msg.id);
       if (known) known.name = msg.name;
@@ -336,6 +365,7 @@ class VoiceChat {
         name: info.name || "Player",
         playerId: info.playerId || "",
         isHost: !!info.isHost,
+        micOn: info.micOn !== false,
         hear: true,
         talk: true,
         speaking: false,
@@ -344,6 +374,7 @@ class VoiceChat {
         route: ""
       }
     ];
+    this._refreshMuted();
     return conn;
   }
 
@@ -359,6 +390,7 @@ class VoiceChat {
     }
     this._names.delete(id);
     this.state.peers = this.state.peers.filter(p => p.id !== id);
+    this._refreshMuted();
   }
 
   _patch(id, props) {
@@ -501,6 +533,8 @@ class VoiceChat {
     this.state.level = 0;
     this.state.peers = [];
     this.state.speakingIds = [];
+    this.state.mutedIds = [];
+    this._mutedKey = "";
     this.state.error = error || "";
   }
 }

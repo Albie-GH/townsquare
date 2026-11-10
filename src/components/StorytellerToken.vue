@@ -13,16 +13,18 @@
         <span class="custom-name" v-if="displayName">{{ displayName }}</span>
         <span class="role-line">(Storyteller)</span>
       </div>
-      <!-- the Storyteller's own mute toggle -->
+      <!-- the Storyteller's own mute toggle; players only see it while the Storyteller is muted -->
       <div
         class="mic-toggle"
-        v-if="canRename && voice.joined"
-        :class="{ muted: !voice.micOn }"
-        :title="voice.micOn ? 'Mute yourself' : 'Unmute yourself'"
-        @click.stop="toggleMic"
+        v-if="showMic"
+        :class="{ muted: isMuted, readonly: !canRename }"
+        :title="
+          canRename ? (isMuted ? 'Unmute yourself' : 'Mute yourself') : 'Muted'
+        "
+        @click.stop="canRename && toggleMic()"
       >
         <font-awesome-icon
-          :icon="voice.micOn ? 'microphone' : 'microphone-slash'"
+          :icon="isMuted ? 'microphone-slash' : 'microphone'"
         />
       </div>
     </div>
@@ -81,6 +83,13 @@ export default {
     // only the Storyteller can rename and mute everyone
     canRename() {
       return !this.session.isSpectator;
+    },
+    isMuted() {
+      if (this.canRename) return !this.voice.micOn;
+      return !!this.hostId && this.voice.mutedIds.includes(this.hostId);
+    },
+    showMic() {
+      return this.voice.joined && (this.canRename || this.isMuted);
     },
     // "Storyteller" is the default and means no custom name was chosen
     displayName() {
@@ -233,6 +242,10 @@ export default {
     }
     &.muted {
       color: #ff6b6b;
+    }
+    &.readonly {
+      cursor: default;
+      pointer-events: none;
     }
   }
 

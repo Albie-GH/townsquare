@@ -927,9 +927,9 @@ export default store => {
         break;
       case "toggleNight":
         session.setIsNight();
-        // night falls: the Storyteller's client mutes every player
-        if (!state.session.isSpectator && state.grimoire.isNight) {
-          voice.setAllMuted(true);
+        // night falls: mute every player; day breaks: unmute everyone
+        if (!state.session.isSpectator) {
+          voice.setAllMuted(!!state.grimoire.isNight);
         }
         break;
       case "setEdition":
