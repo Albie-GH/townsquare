@@ -212,6 +212,12 @@ class VoiceChat {
     this.setHand(!this.state.handUp);
   }
 
+  // Storyteller only: ask a player's client to lower their hand.
+  lowerHand(playerId) {
+    if (!this.state.isHost || !playerId) return;
+    this._send({ type: "lower-hand", playerId });
+  }
+
   _refreshHands() {
     const ids = [];
     if (this._playerId && this.state.handUp) ids.push(this._playerId);
@@ -357,6 +363,10 @@ class VoiceChat {
     } else if (msg.type === "peer-mic") {
       this._patch(msg.id, { micOn: !!msg.on });
       this._refreshMuted();
+    } else if (msg.type === "lower-hand") {
+      if (msg.playerId && msg.playerId === this._playerId && this.state.handUp) {
+        this.setHand(false);
+      }
     } else if (msg.type === "peer-hand") {
       this._patch(msg.id, { hand: !!msg.on });
       this._refreshHands();

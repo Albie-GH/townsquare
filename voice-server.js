@@ -84,6 +84,15 @@ wss.on("connection", ws => {
       }
     }
 
+    if (msg.type === "lower-hand" && room) {
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (me && me.isHost) {
+        const playerId = String(msg.playerId || "").slice(0, 40);
+        for (const p of members.values()) p.ws.send(JSON.stringify({ type: "lower-hand", playerId }));
+      }
+    }
+
     if (msg.type === "rename" && room) {
       const members = rooms.get(room);
       const me = members && members.get(id);

@@ -112,7 +112,7 @@
       </div>
       <div
         class="name"
-        @click="isMenuOpen = !isMenuOpen"
+        @click="isMenuOpen = !isMenuOpen; isTokenMenuOpen = false"
         :class="{ active: isMenuOpen }"
       >
         <span :class="{ empty: !player.name }">{{
@@ -140,7 +140,21 @@
       <!-- Menu for another player's character circle (players only) -->
       <transition name="fold">
         <ul class="menu token-menu" v-if="isTokenMenuOpen">
-          <li @click="addRoleIcon">
+          <template v-if="!session.isSpectator">
+            <li @click="addRoleIcon">
+              <font-awesome-icon icon="theater-masks" />Select role
+            </li>
+            <li @click="lowerHand" v-if="handUp">
+              <font-awesome-icon icon="hand-paper" />Lower hand
+            </li>
+            <li @click="removeMark" v-if="session.markedPlayer === index">
+              <font-awesome-icon icon="skull" />Remove mark
+            </li>
+            <li @click="nominatePlayer()" v-if="!session.nomination">
+              <font-awesome-icon icon="hand-point-right" />Nomination
+            </li>
+          </template>
+          <li @click="addRoleIcon" v-else>
             <font-awesome-icon icon="theater-masks" />Add Role Icon
           </li>
         </ul>
@@ -180,12 +194,6 @@
               <font-awesome-icon icon="chair" />
               Empty seat
             </li>
-            <template v-if="!session.nomination">
-              <li @click="nominatePlayer()">
-                <font-awesome-icon icon="hand-point-right" />
-                Nomination
-              </li>
-            </template>
           </template>
           <li
             class="volume"
@@ -417,6 +425,7 @@ export default {
     },
     nominatePlayer(player) {
       this.isMenuOpen = false;
+      this.isTokenMenuOpen = false;
       this.$emit("trigger", ["nominatePlayer", player]);
     },
     cancel() {
@@ -433,7 +442,8 @@ export default {
     // The Storyteller keeps the old behaviour and opens the role picker.
     onTokenClick() {
       if (!this.session.isSpectator) {
-        this.$emit("trigger", ["openRoleModal"]);
+        this.isMenuOpen = false;
+        this.isTokenMenuOpen = !this.isTokenMenuOpen;
       } else if (this.isYou) {
         this.isTokenMenuOpen = false;
         voice.toggleHand();
@@ -443,6 +453,14 @@ export default {
         this.isMenuOpen = false;
         this.isTokenMenuOpen = !this.isTokenMenuOpen;
       }
+    },
+    lowerHand() {
+      this.isTokenMenuOpen = false;
+      voice.lowerHand(this.player.id);
+    },
+    removeMark() {
+      this.isTokenMenuOpen = false;
+      this.$store.commit("session/setMarkedPlayer", -1);
     },
     addRoleIcon() {
       this.isTokenMenuOpen = false;
@@ -890,6 +908,19 @@ li.move:not(.from) .player .overlay svg.move {
   }
 }
 
+/***** Your own nameplate takes your role's colour (only you see this) *****/
+@mixin own-plate($team, $color) {
+  .player.you.#{$team} > .name {
+    border-color: $color;
+    box-shadow: 0 0 8px 1px $color;
+  }
+}
+@include own-plate("townsfolk", $townsfolk);
+@include own-plate("outsider", $outsider);
+@include own-plate("demon", $demon);
+@include own-plate("minion", $minion);
+@include own-plate("traveler", $traveler);
+
 .player.dead > .name {
   opacity: 0.5;
 }
@@ -931,7 +962,7 @@ li.move:not(.from) .player .overlay svg.move {
   align-items: center;
   justify-content: center;
   background: #ffee006b;
-  //border: 3px solid #ffee006f;
+  //border: 3px solid #fff000;
   border-radius: 50%;
   box-shadow: 0 0 8px #fff000;
   color: #ffd000;
@@ -942,7 +973,6 @@ li.move:not(.from) .player .overlay svg.move {
   width: 80%;
   height: 80%;
 }
-
 
 .player .token-menu {
   bottom: auto;
