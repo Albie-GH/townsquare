@@ -108,6 +108,7 @@
           :autoplay="!grimoire.isMuted"
           src="../assets/sounds/countdown.mp3"
           :muted="grimoire.isMuted"
+          :volume.prop="0.5"
         ></audio>
       </div>
     </transition>

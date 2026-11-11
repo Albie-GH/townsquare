@@ -11,6 +11,8 @@ class LiveSession {
     // this._wss = "ws://localhost:8081/"; // uncomment if using local server with NODE_ENV=development
     this._socket = null;
     this._isSpectator = true;
+    // co-Storyteller: connected like a player, but gets everything from the Storyteller over voice
+    this._coHost = false;
     this._gamestate = [];
     this._store = store;
     this._pingInterval = 30 * 1000; // 30 seconds between pings
@@ -131,6 +133,8 @@ class LiveSession {
     } catch (err) {
       console.log("unsupported socket message", data);
     }
+    // the co-Storyteller's Grimoire comes straight from the Storyteller instead
+    if (this._coHost && command !== "ping") return;
     switch (command) {
       case "getGamestate":
         this.sendGamestate(params);
@@ -233,7 +237,9 @@ class LiveSession {
     this._pings = {};
     this._store.commit("session/setPlayerCount", 0);
     this._store.commit("session/setPing", 0);
-    this._isSpectator = this._store.state.session.isSpectator;
+    // the co-Storyteller connects like a player (the session only has one host)
+    this._isSpectator =
+      this._store.state.session.isSpectator || this._coHost;
     this._open(channel);
   }
 
@@ -911,13 +917,227 @@ export default store => {
     });
   };
 
+  // ---- co-Storyteller: both Storytellers keep the same Grimoire ----
+  // Grimoire changes (players, characters, reminders, bluffs, fabled, script) go across as
+  // a snapshot; voting and night changes are replayed as the same mutation. The Storyteller
+  // passes everything on to the players as usual, the co-Storyteller sends nothing to them.
+  const sync = { applying: false, timer: null };
+  const canSync = () =>
+    voice.state.isHost &&
+    !!voice.state.cohostPlayerId &&
+    !!store.state.session.sessionId &&
+    !store.state.session.isSpectator;
+
+  const SNAPSHOT = new Set([
+    "players/update",
+    "players/add",
+    "players/remove",
+    "players/swap",
+    "players/move",
+    "players/set",
+    "players/clear",
+    "players/setBluff",
+    "players/setFabled",
+    "setEdition",
+    "setCustomRoles"
+  ]);
+  // what to send for each replayed mutation (undefined payloads are made explicit,
+  // so a "toggle" lands the same way on the other side)
+  const REPLAY = {
+    "session/nomination": p => p,
+    "session/setNomination": p => p,
+    "session/setVoteInProgress": p => p,
+    "session/voteSync": (p, s) => [p[0], !!s.session.votes[p[0]]],
+    "session/vote": (p, s) => [p[0], !!s.session.votes[p[0]]],
+    "session/lockVote": (p, s) => s.session.lockedVote,
+    "session/setVotingSpeed": p => p,
+    "session/clearVoteHistory": () => null,
+    "session/setVoteHistoryAllowed": p => p,
+    "session/setMarkedPlayer": p => p,
+    "session/addHistory": () => null,
+    "session/distributeRoles": p => p,
+    toggleNight: (p, s) => !!s.grimoire.isNight
+  };
+
+  const roleRef = role =>
+    !role || !role.id ? {} : role.isCustom ? role : { id: role.id };
+  const findRole = ref => {
+    if (!ref || !ref.id) return {};
+    return (
+      store.state.roles.get(ref.id) ||
+      store.getters.rolesJSONbyId.get(ref.id) ||
+      store.state.fabled.get(ref.id) ||
+      (ref.isCustom ? ref : {})
+    );
+  };
+  const editionRef = () => {
+    const { edition } = store.state;
+    return {
+      edition: edition.isOfficial ? { id: edition.id } : edition,
+      roles: edition.isOfficial ? null : store.getters.customRolesStripped
+    };
+  };
+  const snapshot = () => {
+    const { players, bluffs, fabled } = store.state.players;
+    return {
+      ...editionRef(),
+      players: players.map(p => ({
+        name: p.name,
+        id: p.id,
+        role: roleRef(p.role),
+        reminders: p.reminders || [],
+        isDead: !!p.isDead,
+        isVoteless: !!p.isVoteless,
+        pronouns: p.pronouns || "",
+        revealed: p.revealed || ""
+      })),
+      bluffs: bluffs.map(roleRef),
+      fabled: fabled.map(roleRef)
+    };
+  };
+  const sendSnapshot = () => {
+    clearTimeout(sync.timer);
+    sync.timer = setTimeout(() => {
+      if (canSync()) voice.sendStSync({ kind: "snap", snap: snapshot() });
+    }, 60);
+  };
+  const sendFull = () => {
+    const { session, grimoire } = store.state;
+    voice.sendStSync({
+      kind: "full",
+      snap: snapshot(),
+      session: {
+        nomination: session.nomination,
+        votes: session.votes,
+        lockedVote: session.lockedVote,
+        votingSpeed: session.votingSpeed,
+        isVoteInProgress: session.isVoteInProgress,
+        markedPlayer: session.markedPlayer,
+        isVoteHistoryAllowed: session.isVoteHistoryAllowed,
+        isNight: !!grimoire.isNight
+      }
+    });
+  };
+  // only commits what actually differs, so the Storyteller only passes on real changes
+  const applySnapshot = snap => {
+    if (!snap || !Array.isArray(snap.players)) return;
+    const mine = editionRef();
+    if (
+      JSON.stringify(mine.edition) !== JSON.stringify(snap.edition) ||
+      JSON.stringify(mine.roles) !== JSON.stringify(snap.roles)
+    ) {
+      store.commit("setEdition", snap.edition);
+      if (snap.roles) store.commit("setCustomRoles", snap.roles);
+    }
+    const players = store.state.players.players;
+    while (players.length < snap.players.length) {
+      store.commit("players/add", "");
+    }
+    while (players.length > snap.players.length) {
+      store.commit("players/remove", players.length - 1);
+    }
+    snap.players.forEach((sent, index) => {
+      const player = players[index];
+      const update = (property, value) =>
+        store.commit("players/update", { player, property, value });
+      ["name", "id", "isDead", "isVoteless", "pronouns", "revealed"].forEach(
+        property => {
+          if ((player[property] || "") !== (sent[property] || "")) {
+            update(property, sent[property]);
+          }
+        }
+      );
+      if ((player.role.id || "") !== (sent.role.id || "")) {
+        update("role", findRole(sent.role));
+      }
+      if (JSON.stringify(player.reminders) !== JSON.stringify(sent.reminders)) {
+        update("reminders", sent.reminders);
+      }
+    });
+    const ids = list => JSON.stringify(list.map(r => (r && r.id) || ""));
+    const bluffs = snap.bluffs || [];
+    if (ids(store.state.players.bluffs) !== ids(bluffs)) {
+      store.commit("players/setBluff");
+      bluffs.forEach((role, index) =>
+        store.commit("players/setBluff", { index, role: findRole(role) })
+      );
+    }
+    const fabled = snap.fabled || [];
+    if (ids(store.state.players.fabled) !== ids(fabled)) {
+      store.commit("players/setFabled", {
+        fabled: fabled.map(f => store.state.fabled.get(f.id) || f)
+      });
+    }
+  };
+  const applySession = s => {
+    if (!s) return;
+    store.commit("session/nomination", {
+      nomination: s.nomination,
+      votes: s.votes,
+      votingSpeed: s.votingSpeed,
+      lockedVote: s.lockedVote,
+      isVoteInProgress: s.isVoteInProgress
+    });
+    store.commit("session/setMarkedPlayer", s.markedPlayer);
+    store.commit("session/setVoteHistoryAllowed", s.isVoteHistoryAllowed);
+    store.commit("toggleNight", !!s.isNight);
+  };
+
+  voice.onStSync = data => {
+    if (!canSync()) return;
+    sync.applying = true;
+    try {
+      if (data.kind === "hello") {
+        // the co-Storyteller just arrived: send them the whole Grimoire
+        if (!store.state.session.isCoHost) sendFull();
+      } else if (data.kind === "snap") {
+        applySnapshot(data.snap);
+      } else if (data.kind === "full") {
+        applySnapshot(data.snap);
+        applySession(data.session);
+      } else if (data.kind === "m" && REPLAY[data.type]) {
+        const payload =
+          data.type === "session/addHistory"
+            ? store.state.players.players
+            : data.payload === null
+            ? undefined
+            : data.payload;
+        store.commit(data.type, payload);
+      }
+    } catch (e) {
+      console.warn("Storyteller sync failed", e);
+    } finally {
+      sync.applying = false;
+    }
+  };
+
+  // You became (or stopped being) the co-Storyteller
+  voice.onCohost = isMe => {
+    const playerId = store.state.session.playerId;
+    if (isMe) {
+      session._coHost = true;
+      store.commit("session/setCoHost", true);
+      store.commit("session/setSpectator", false);
+      voice.sendStSync({ kind: "hello" });
+    } else if (store.state.session.isCoHost) {
+      // back to being a player: forget the Grimoire and ask for the public one
+      session._coHost = false;
+      store.commit("session/setCoHost", false);
+      store.commit("session/setSpectator", true);
+      store.dispatch("players/clearRoles");
+      session._sendDirect("host", "getGamestate", playerId);
+    }
+  };
+
   // Voice starts automatically with the live session
-  const joinVoice = ({ session: { sessionId, isSpectator, playerId } }) => {
+  const joinVoice = ({
+    session: { sessionId, isSpectator, isCoHost, playerId }
+  }) => {
     voice.join(
       sessionId,
       isSpectator ? "Player" : "Storyteller",
       playerId,
-      !isSpectator
+      !isSpectator && !isCoHost
     );
   };
   // the constructor reconnects to a stored session without a mutation
@@ -925,8 +1145,22 @@ export default store => {
 
   // listen to mutations
   store.subscribe(({ type, payload }, state) => {
+    if (!sync.applying && canSync()) {
+      if (SNAPSHOT.has(type)) sendSnapshot();
+      else if (REPLAY[type]) {
+        const value = REPLAY[type](payload, state);
+        voice.sendStSync({
+          kind: "m",
+          type,
+          payload: value === undefined ? null : value
+        });
+      }
+    }
     switch (type) {
       case "session/setSessionId":
+        // a new session starts without a co-Storyteller
+        session._coHost = false;
+        if (state.session.isCoHost) store.commit("session/setCoHost", false);
         if (state.session.sessionId) {
           session.connect(state.session.sessionId);
           voice.leave(); // switching sessions: drop the old voice room first
@@ -970,7 +1204,7 @@ export default store => {
       case "toggleNight":
         session.setIsNight();
         // night falls: mute every player; day breaks: unmute everyone
-        if (!state.session.isSpectator) {
+        if (!state.session.isSpectator && !sync.applying) {
           voice.setAllMuted(!!state.grimoire.isNight);
           // keep the shared phase in step (dusk is only left by going to night)
           if (state.grimoire.isNight) voice.setPhase("night");

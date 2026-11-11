@@ -14,6 +14,7 @@ const handleVote = (state, [index, vote]) => {
 const state = () => ({
   sessionId: "",
   isSpectator: false,
+  isCoHost: false, // the co-Storyteller: a second Storyteller who shares the Grimoire
   isReconnecting: false,
   playerCount: 0,
   ping: 0,
@@ -43,6 +44,7 @@ const set = key => (state, val) => {
 const mutations = {
   setPlayerId: set("playerId"),
   setSpectator: set("isSpectator"),
+  setCoHost: set("isCoHost"),
   setReconnecting: set("isReconnecting"),
   setPlayerCount: set("playerCount"),
   setPing: set("ping"),

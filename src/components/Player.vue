@@ -1,5 +1,5 @@
 <template>
-  <li :style="zoom">
+  <li :style="zoom" :class="{ 'menu-open': isMenuOpen || isTokenMenuOpen }">
     <div
       ref="player"
       class="player"
@@ -50,8 +50,16 @@
       <!-- End of Game: like hiding the grimoire, the portrait and the revealed
            role are two sides of a card, and "Reveal as Drunk" turns it once more -->
       <template v-if="showReveal">
-        <Token class="reveal-face role" :role="roleFaceRole || {}" />
-        <Token class="reveal-face drunk" :role="drunkRole || {}" />
+        <Token
+          class="reveal-face role"
+          :role="roleFaceRole || {}"
+          @set-role="onTokenClick"
+        />
+        <Token
+          class="reveal-face drunk"
+          :role="drunkRole || {}"
+          @set-role="onTokenClick"
+        />
       </template>
       <div class="speaking-ring"></div>
       <div class="hand-raised" v-if="handUp" title="Hand raised">
@@ -160,7 +168,12 @@
               <font-awesome-icon icon="book-open" />Send Grimoire
             </li>
             <li @click="startWhisper" v-if="canWhisper">
-              <font-awesome-icon icon="comments" />Private chat
+              <font-awesome-icon icon="comments" />{{
+                myPrivateRoom ? "Add to private room" : "Private chat"
+              }}
+            </li>
+            <li @click="removeFromRoom" v-if="canRemoveFromRoom">
+              <font-awesome-icon icon="sign-out-alt" />Remove from private room
             </li>
             <li @click="lowerHand" v-if="handUp">
               <font-awesome-icon icon="hand-paper" />Lower hand
@@ -345,6 +358,20 @@ export default {
       );
     },
     // the Storyteller can pull a seated player into a private chat, in any phase
+    // the Storyteller is in their own private room (or a private chat)
+    myPrivateRoom: function() {
+      return !this.session.isSpectator && !!this.myChat && this.myChat.whisper
+        ? this.myChat
+        : null;
+    },
+    canRemoveFromRoom: function() {
+      return (
+        !!this.myPrivateRoom &&
+        !!this.player.id &&
+        !!this.theirChat &&
+        this.theirChat.id === this.myPrivateRoom.id
+      );
+    },
     canWhisper: function() {
       return (
         !this.session.isSpectator &&
@@ -534,9 +561,18 @@ export default {
       const name = this.player.name || "this player";
       return confirm(`Mark ${name} as dead?`);
     },
+    confirmRevive() {
+      const name = this.player.name || "this player";
+      return confirm(`Bring ${name} back to life?`);
+    },
     toggleStatus() {
       if (this.session.isSpectator) return;
       if (!this.player.isDead && !this.confirmDeath()) return;
+      // in the public view a dead player first loses their vote, the next click revives them
+      const revives =
+        this.player.isDead &&
+        (!this.grimoire.isPublic || this.player.isVoteless);
+      if (revives && !this.confirmRevive()) return;
       if (this.grimoire.isPublic) {
         if (!this.player.isDead) {
           this.updatePlayer("isDead", true);
@@ -685,6 +721,10 @@ export default {
       this.isTokenMenuOpen = false;
       voice.whisper(this.player.id);
     },
+    removeFromRoom() {
+      this.isTokenMenuOpen = false;
+      voice.kick(this.player.id);
+    },
     requestChat() {
       this.isTokenMenuOpen = false;
       voice.requestChat(this.player.id);
@@ -749,10 +789,10 @@ export default {
 
   .shroud {
     top: 0;
-    left: 0;
+    left: 35%;
     position: absolute;
-    width: 100%;
-    height: 45%;
+    width: 30%;
+    height: 25%;
     cursor: pointer;
     transform: rotateX(0deg);
     transform-origin: top center;
@@ -788,9 +828,14 @@ export default {
     }
   }
 
+  // dead: the marker is drawn full size (as wide as the token, 45% of it tall)
+  // while the clickable area stays the small box at the top
   &.dead .shroud:before {
     opacity: 1;
     top: 0;
+    width: 333.33%;
+    height: 180%;
+    margin-left: -166.67%;
     transform: perspective(400px) scale(1);
   }
 
@@ -818,9 +863,12 @@ export default {
 .player.revealed .token.reveal-face.role,
 .player.revealed-drunk .token.reveal-face.drunk {
   transform: perspective(400px) rotateY(0deg) !important;
+  // the side facing up takes the clicks (the portrait is turned away)
+  pointer-events: auto;
 }
 .player.revealed-drunk .token.reveal-face.role {
   transform: perspective(400px) rotateY(-180deg) !important;
+  pointer-events: none;
 }
 #townsquare .circle .player.revealed > .token:not(.reveal-face),
 #townsquare.public .circle .player.revealed > .life {

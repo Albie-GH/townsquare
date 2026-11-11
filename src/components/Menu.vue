@@ -392,7 +392,7 @@ export default {
         this.session.sessionId,
         name,
         this.session.playerId,
-        !this.session.isSpectator
+        !this.session.isSpectator && !this.session.isCoHost
       );
     },
     leaveVoice() {

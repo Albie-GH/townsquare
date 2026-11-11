@@ -64,6 +64,8 @@ export default {
             : `Chat request sent to ${who}...`;
         case "accepted":
           return n.num ? `You're now in Room ${n.num}` : "Private chat started";
+        case "cohost":
+          return "You're now the co-Storyteller";
         case "declined":
           return `${who} declined`;
         case "wait":
@@ -93,6 +95,9 @@ export default {
       if (req.kind === "invite") return `${who} invited you to Room ${req.num}`;
       if (req.kind === "join") return `${who} wants to join Room ${req.num}`;
       if (req.kind === "st") return `${who} wants a private chat with you`;
+      if (req.kind === "cohost") {
+        return `${req.name || who} wants to be your co-Storyteller`;
+      }
       return `${who} wants to chat privately`;
     },
     endWhisper() {

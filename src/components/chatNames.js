@@ -19,6 +19,9 @@ export default {
       if (playerId && playerId === this.voice.hostPlayerId) {
         return this.voice.hostName || "Storyteller";
       }
+      if (playerId && playerId === this.voice.cohostPlayerId) {
+        return this.voice.cohostName || "Co-Storyteller";
+      }
       const seat = this.chatPlayers.find(p => p.id && p.id === playerId);
       if (seat && seat.name) return seat.name;
       const peer = this.voice.peers.find(p => p.playerId === playerId);

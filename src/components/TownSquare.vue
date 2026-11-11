@@ -14,6 +14,11 @@
     <ChatRooms v-if="session.sessionId"></ChatRooms>
     <ChatPrompts v-if="session.sessionId"></ChatPrompts>
     <StorytellerToken v-if="session.sessionId"></StorytellerToken>
+    <!-- the co-Storyteller sits to the right of the Storyteller -->
+    <StorytellerToken
+      v-if="session.sessionId && voice.cohostPlayerId"
+      cohost
+    ></StorytellerToken>
     <ul class="circle" :class="['size-' + players.length]">
       <Player
         v-for="(player, index) in players"
@@ -325,6 +330,11 @@ export default {
 
     &:hover {
       z-index: 25 !important;
+    }
+    // a seat with its menu open goes over everything else on the board,
+    // including the Storyteller portraits (but not the phase bar or prompts)
+    &.menu-open {
+      z-index: 55 !important;
     }
 
     > .player {

@@ -1,58 +1,99 @@
 <template>
-  <div class="storyteller" :class="{ speaking }">
+  <div
+    class="storyteller"
+    :class="{ speaking, cohost, 'menu-open': isMenuOpen || isTokenMenuOpen }"
+  >
     <div
       class="st-token"
-      :class="{ clickable: canRequest, 'out-of-room': outOfRoom }"
+      :class="{ clickable: hasTokenMenu, 'out-of-room': outOfRoom }"
       @click="toggleTokenMenu"
     >
       <font-awesome-icon icon="theater-masks" />
       <div class="speaking-ring"></div>
     </div>
+    <!-- Storytellers only: the always-open line between the two Storytellers.
+         Either Storyteller can mute themselves or the other one on it. -->
+    <div
+      class="line-toggle"
+      v-if="showLine"
+      :class="{ muted: lineMuted || lineAuto, auto: lineAuto && !lineMuted, speaking: lineSpeaking }"
+      :title="lineTitle"
+      @click.stop="toggleLine"
+    >
+      <font-awesome-icon icon="people-arrows" />
+    </div>
     <div class="st-plate">
       <div
         class="st-name"
-        :class="{ active: isMenuOpen, clickable: canAdjust || canRename }"
+        :class="{ active: isMenuOpen, clickable: hasNameMenu }"
         @click="toggleMenu"
       >
         <span class="custom-name" v-if="displayName">{{ displayName }}</span>
-        <span class="role-line">(Storyteller)</span>
+        <span class="role-line">{{
+          cohost ? "(Co-Storyteller)" : "(Storyteller)"
+        }}</span>
       </div>
-      <!-- the Storyteller's own mute toggle; players only see it while the Storyteller is muted -->
+      <!-- your own mute toggle; everyone else only sees it while you are muted -->
       <div
         class="mic-toggle"
         v-if="showMic"
-        :class="{ muted: isMuted, readonly: !canRename }"
+        :class="{ muted: isMuted, readonly: !isSelf }"
         :title="
-          canRename ? (isMuted ? 'Unmute yourself' : 'Mute yourself') : 'Muted'
+          isSelf ? (isMuted ? 'Unmute yourself' : 'Mute yourself') : 'Muted'
         "
-        @click.stop="canRename && toggleMic()"
+        @click.stop="isSelf && toggleMic()"
       >
         <font-awesome-icon
           :icon="isMuted ? 'microphone-slash' : 'microphone'"
         />
       </div>
     </div>
-    <!-- Storyteller only: mute / unmute every player -->
+    <!-- Storytellers, under their own token: mute / unmute every player -->
     <div
       class="button st-muteall"
-      v-if="canRename && voice.joined"
+      v-if="isSelf && voice.joined"
       :class="{ demon: voice.allMuted, townsfolk: !voice.allMuted }"
       @click="toggleMuteAll"
     >
       {{ voice.allMuted ? "Unmute all" : "Mute all" }}
     </div>
-    <!-- Players: ask the Storyteller for a private chat -->
+    <!-- Storytellers, under the other Storyteller's token: both go quiet everywhere
+         and only talk to each other over the line -->
+    <div
+      class="button st-muteall st-urgent"
+      v-if="showUrgent"
+      :class="{ on: voice.urgent }"
+      :title="
+        voice.urgent
+          ? 'Back to normal: your own mutes come back'
+          : 'Mute both Storytellers everywhere and talk only over the line'
+      "
+      @click="toggleUrgent"
+    >
+      {{ voice.urgent ? "End Urgent Line" : "Urgent Line" }}
+    </div>
+    <!-- Players: ask for a private chat, or to help as co-Storyteller.
+         Storytellers: remove the co-Storyteller -->
     <transition name="fold">
-      <ul class="st-menu st-token-menu" v-if="isTokenMenuOpen && canRequest">
-        <li @click="requestChat">
+      <ul class="st-menu st-token-menu" v-if="isTokenMenuOpen && hasTokenMenu">
+        <li v-if="canRequest" @click="requestChat">
           <font-awesome-icon icon="comments" />Request chat
+        </li>
+        <li v-if="canRequestCohost" @click="requestCohost">
+          <font-awesome-icon icon="user-friends" />Request co-storyteller
+        </li>
+        <li v-if="canRemoveCohost" @click="removeCohost">
+          <font-awesome-icon icon="times-circle" />Remove co-storyteller
         </li>
       </ul>
     </transition>
     <transition name="fold">
-      <ul class="st-menu" v-if="isMenuOpen && (canAdjust || canRename)">
-        <li v-if="canRename" @click="setName">
+      <ul class="st-menu" v-if="isMenuOpen && hasNameMenu">
+        <li v-if="isSelf" @click="setName">
           <font-awesome-icon icon="user-edit" />Set name
+        </li>
+        <li v-if="isSelf && cohost" @click="stepDown">
+          <font-awesome-icon icon="sign-out-alt" />Step down
         </li>
         <li class="volume" v-if="canAdjust">
           <font-awesome-icon icon="volume-up" />
@@ -63,7 +104,11 @@
             step="5"
             :value="volume"
             @input="setVolume"
-            title="How loud the Storyteller is for you"
+            :title="
+              cohost
+                ? 'How loud the co-Storyteller is for you'
+                : 'How loud the Storyteller is for you'
+            "
           />
           <span>{{ volume }}%</span>
         </li>
@@ -77,6 +122,13 @@ import { mapState } from "vuex";
 import voice from "../voice";
 
 export default {
+  props: {
+    // the co-Storyteller's token (to the right) instead of the Storyteller's
+    cohost: {
+      type: Boolean,
+      default: false
+    }
+  },
   data() {
     return {
       isMenuOpen: false,
@@ -86,14 +138,21 @@ export default {
   },
   computed: {
     ...mapState(["session"]),
+    ...mapState("players", ["players"]),
+    // playerId of the Storyteller this token belongs to
     hostId() {
-      return this.voice.hostPlayerId;
+      return this.cohost ? this.voice.cohostPlayerId : this.voice.hostPlayerId;
     },
-    // players can adjust how loud the Storyteller is for them
+    // this token is you: you can rename yourself and mute everyone
+    isSelf() {
+      if (this.cohost) return this.voice.isCoHost;
+      return !this.session.isSpectator && !this.session.isCoHost;
+    },
+    // everyone else can adjust how loud this Storyteller is for them
     canAdjust() {
-      return this.voice.joined && this.session.isSpectator && !!this.hostId;
+      return this.voice.joined && !this.isSelf && !!this.hostId;
     },
-    // players can ask the Storyteller for a private chat, if not already in one
+    // players can ask a Storyteller for a private chat, if not already in one
     canRequest() {
       return (
         this.session.isSpectator &&
@@ -102,9 +161,75 @@ export default {
         !voice.chatOf(this.session.playerId)
       );
     },
-    // only the Storyteller can rename and mute everyone
-    canRename() {
-      return !this.session.isSpectator;
+    // a player without a seat can offer to help as the co-Storyteller
+    canRequestCohost() {
+      return (
+        !this.cohost &&
+        this.session.isSpectator &&
+        this.voice.joined &&
+        !!this.hostId &&
+        !this.voice.cohostPlayerId &&
+        !this.players.some(p => p.id && p.id === this.session.playerId)
+      );
+    },
+    // the Storytellers' line, shown to both Storytellers once there are two
+    showLine() {
+      return (
+        this.voice.joined &&
+        this.voice.isHost &&
+        !!this.voice.cohostPlayerId &&
+        !!this.hostId
+      );
+    },
+    // talking over the Storytellers' line (whether or not they are heard elsewhere too)
+    lineSpeaking() {
+      return !!this.hostId && this.voice.lineSpeakingIds.includes(this.hostId);
+    },
+    // the Urgent Line keeps both lines open, whatever they were set to
+    lineMuted() {
+      return !this.voice.urgent && this.voice.lineMuted.includes(this.hostId);
+    },
+    showUrgent() {
+      return (
+        this.voice.joined &&
+        this.voice.isHost &&
+        !this.isSelf &&
+        !!this.hostId &&
+        !!this.voice.cohostPlayerId
+      );
+    },
+    // off for now: the other Storyteller already hears them where they both are
+    lineAuto() {
+      return this.voice.lineAutoIds.includes(this.hostId);
+    },
+    lineTitle() {
+      const who = this.isSelf
+        ? "yourself"
+        : this.cohost
+        ? "the co-Storyteller"
+        : "the Storyteller";
+      if (this.lineAuto && !this.lineMuted) {
+        return (
+          "Line off while you're unmuted in the same place " +
+          "(click to keep it muted after)"
+        );
+      }
+      return (
+        (this.lineMuted ? "Unmute " : "Mute ") + who + " on the Storytellers' line"
+      );
+    },
+    canRemoveCohost() {
+      return this.cohost && !this.isSelf && this.voice.isHost && !this.voice.isCoHost;
+    },
+    hasTokenMenu() {
+      return (
+        this.canRequest ||
+        this.canRequestCohost ||
+        this.canRemoveCohost
+      );
+    },
+    hasNameMenu() {
+      return this.isSelf || this.canAdjust;
     },
     isMuted() {
       // Town Square mute; private chats have their own toggle in the room list
@@ -118,12 +243,13 @@ export default {
       return !(theirs && theirs.id === mine.id);
     },
     showMic() {
-      return this.voice.joined && (this.canRename || this.isMuted);
+      return this.voice.joined && (this.isSelf || this.isMuted);
     },
     // "Storyteller" is the default and means no custom name was chosen
     displayName() {
-      const name = this.voice.hostName;
-      return name && name !== "Storyteller" ? name : "";
+      const name = this.cohost ? this.voice.cohostName : this.voice.hostName;
+      const fallback = this.cohost ? "Co-Storyteller" : "Storyteller";
+      return name && name !== fallback ? name : "";
     },
     speaking() {
       return !!this.hostId && this.voice.speakingIds.includes(this.hostId);
@@ -136,21 +262,46 @@ export default {
   methods: {
     toggleMenu() {
       this.isTokenMenuOpen = false;
-      if (this.canAdjust || this.canRename) this.isMenuOpen = !this.isMenuOpen;
+      if (this.hasNameMenu) this.isMenuOpen = !this.isMenuOpen;
     },
     requestChat() {
       this.isTokenMenuOpen = false;
-      voice.requestStoryteller();
+      voice.requestStoryteller(this.hostId);
+    },
+    requestCohost() {
+      this.isTokenMenuOpen = false;
+      const name = prompt("Your name as co-Storyteller", "");
+      if (name === null) return;
+      voice.requestCohost(name);
+    },
+    toggleUrgent() {
+      voice.setUrgent(!this.voice.urgent);
+    },
+    toggleLine() {
+      voice.setLineMuted(this.hostId, !this.lineMuted);
+    },
+    removeCohost() {
+      this.isTokenMenuOpen = false;
+      if (confirm("Remove the co-Storyteller? They go back to being a player.")) {
+        voice.removeCohost();
+      }
+    },
+    stepDown() {
+      this.isMenuOpen = false;
+      if (confirm("Step down as co-Storyteller? You go back to being a player.")) {
+        voice.removeCohost();
+      }
     },
     toggleTokenMenu() {
-      if (!this.canRequest) return;
+      if (!this.hasTokenMenu) return;
       this.isMenuOpen = false;
       this.isTokenMenuOpen = !this.isTokenMenuOpen;
     },
     setName() {
       this.isMenuOpen = false;
       const name = prompt(
-        "Storyteller name (leave empty to reset)",
+        (this.cohost ? "Co-Storyteller" : "Storyteller") +
+          " name (leave empty to reset)",
         this.displayName
       );
       if (name !== null) voice.setHostName(name);
@@ -177,6 +328,19 @@ export default {
   left: 20px;
   width: 11vh;
   z-index: 49;
+  // to the right of the Storyteller, clear of their mute toggle
+  &.cohost {
+    left: calc(20px + 13.2vh + 50px);
+  }
+  // an open menu goes over the other Storyteller's token and the seats
+  &.menu-open {
+    z-index: 55;
+  }
+  // the co-Storyteller's line toggle sits on the top left, facing the Storyteller's
+  &.cohost .line-toggle {
+    right: auto;
+    left: -20px;
+  }
 
   // the token itself is display only, nobody can click it
   .st-token {
@@ -210,6 +374,56 @@ export default {
     }
     svg {
       position: absolute;
+    }
+  }
+
+  // the Storytellers' line, on the token's top right corner
+  .line-toggle {
+    position: absolute;
+    top: -6px;
+    right: -20px;
+    width: 42px;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: #3ddc84;
+    background: rgba(0, 0, 0, 0.7);
+    border: 2px solid black;
+    border-radius: 50%;
+    box-shadow: 0 0 5px black;
+    cursor: pointer;
+    z-index: 2;
+    transition: border-color 120ms, box-shadow 120ms;
+    &:hover {
+      color: red;
+    }
+    // talking over the line: the same green ring as the portrait
+    &.speaking {
+      border-color: #3ddc84;
+      box-shadow: 0 0 0 2px #3ddc84, 0 0 10px 3px rgba(61, 220, 132, 0.7);
+    }
+    // muted automatically (not by a click): a softer look
+    &.muted.auto {
+      color: #bbb;
+      opacity: 0.6;
+      &:after {
+        background: #bbb !important;
+      }
+    }
+    &.muted {
+      color: #ff6b6b;
+      opacity: 0.8;
+      // a slash through the icon, like the mic toggles
+      &:after {
+        content: "";
+        position: absolute;
+        width: 2px;
+        height: 22px;
+        background: #ff6b6b;
+        transform: rotate(45deg);
+      }
     }
   }
 
@@ -304,6 +518,25 @@ export default {
     margin: 6px 0 0 -10%;
     text-align: center;
     font-size: 80%;
+  }
+
+  // amber, glowing while it is on
+  .st-urgent {
+    background: radial-gradient(
+          at 0 -15%,
+          rgba(255, 255, 255, 0.07) 70%,
+          rgba(255, 255, 255, 0) 71%
+        )
+        0 0/80% 90% no-repeat content-box,
+      linear-gradient(#b86e00, rgba(5, 0, 0, 0.22)) content-box,
+      linear-gradient(#292929, #422400) border-box;
+    box-shadow: inset 0 1px 1px #9c5c00, 0 0 10px #000;
+    &:hover {
+      color: #ffc04d;
+    }
+    &.on {
+      box-shadow: inset 0 1px 1px #9c5c00, 0 0 12px 3px rgba(255, 170, 0, 0.8);
+    }
   }
 
   .st-menu {

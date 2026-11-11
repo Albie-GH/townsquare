@@ -60,10 +60,17 @@ class VoiceChat {
       error: "",
       peers: [], // { id, name, playerId, hear, talk, speaking, status, rtt, route }
       speakingIds: [], // playerIds currently talking, including your own
+      lineSpeakingIds: [], // Storytellers heard talking only over the Storytellers' line
       volumes: loadVolumes(), // playerId -> 0-100, how loud you hear each player
       hostPlayerId: "", // playerId of the storyteller in the voice room, if known
       hostName: loadHostName(), // the Storyteller's chosen name ("Storyteller" = none)
-      isHost: false, // this client is the Storyteller
+      isHost: false, // this client is a Storyteller (the Storyteller or the co-Storyteller)
+      isCoHost: false, // this client is the co-Storyteller
+      cohostPlayerId: "", // playerId of the co-Storyteller, if there is one
+      cohostName: "", // the co-Storyteller's name
+      lineMuted: [], // Storytellers muted on the always-open line between the two Storytellers
+      lineAutoIds: [], // Storytellers whose line is off for now: the other one already hears them
+      urgent: false, // Urgent Line: both Storytellers muted everywhere, only on their line
       allMuted: false, // the Storyteller has muted everyone (players can't unmute)
       mutedIds: [], // playerIds currently muted (self-muted or muted by the Storyteller)
       handIds: [], // playerIds with a raised hand, including your own
@@ -77,6 +84,7 @@ class VoiceChat {
       mutedPlayers: [], // playerIds the Storyteller has muted one by one
       lockedMute: false, // the Storyteller has muted you personally (Town Square)
       roomMicOn: true, // your own mute toggle inside a private chat
+      tsMicOn: true, // your Town Square mic: your own toggle, and not muted by the Storyteller
       roomMutedIds: [], // playerIds muted inside their private chat
       micLocked: false, // the Storyteller has muted you where you are right now
       bluffsPulse: 0, // goes up each time the Storyteller sends you demon bluffs
@@ -97,11 +105,15 @@ class VoiceChat {
     this._roomKey = ""; // which chat (and whether unseen) your room mute belongs to
     this._micKey = ""; // last mic state sent to the server
     this._selfMuted = false; // the player muted themselves; Storyteller unmutes keep it
+    this._trackOn = true; // your mic is being sent (your chat, or the Storytellers' line)
     this._prevChat = null; // { id, members } of your own chat, to hear people come and go
     this._bellTimer = null; // rings the bell 5 seconds before the chat timer ends
     this._serverPhase = ""; // last phase the server told us about, to ring the bell on day
     this.onBluffs = null; // set by socket.js, stores the bluffs you were sent
     this.onGrimoire = null; // set by socket.js, shows the Grimoire you were sent
+    this.onCohost = null; // set by socket.js, you became (true) or stopped being (false) the co-Storyteller
+    this.onStSync = null; // set by socket.js, Grimoire changes from the other Storyteller
+    this._joinedAsHost = false; // joined as the Storyteller (not the co-Storyteller)
     this._levelTimer = null;
     this._pollingLevels = false;
     this._busy = false;
@@ -129,6 +141,7 @@ class VoiceChat {
     this.state.error = "";
     this._playerId = playerId || "";
     this.state.hostPlayerId = isHost ? this._playerId : "";
+    this._joinedAsHost = !!isHost;
     if (isHost) name = this.state.hostName;
     this.state.isHost = !!isHost;
     this.state.allMuted = false;
@@ -239,21 +252,29 @@ class VoiceChat {
       locked = !host && (this.state.lockedMute || this.state.allMuted);
       on = !this._selfMuted && !locked;
     }
+    const urgent = this._urgentSelf();
+    if (urgent) on = false;
     this.state.micLocked = locked;
     this.state.roomMicOn = !this._roomSelfMuted;
-    if (this._track) {
-      this._track.enabled = on;
-      if (this._rawTrack) this._rawTrack.enabled = on;
-    }
+    this.state.tsMicOn =
+      !this._selfMuted &&
+      !urgent &&
+      !(!host && (this.state.lockedMute || this.state.allMuted));
+    // the Storytellers' line keeps your mic going for the other Storyteller; everyone
+    // else goes by your chat / Town Square toggles, which they are told about below
     this.state.micOn = on;
-    const key = `${!this._selfMuted},${!this._roomSelfMuted}`;
+    this._trackOn = on || this._lineOn(this._playerId);
+    if (this._track) {
+      this._track.enabled = this._trackOn;
+      if (this._rawTrack) this._rawTrack.enabled = this._trackOn;
+    }
+    // everyone else silences you by these, so they include the Urgent Line
+    const tsOn = !this._selfMuted && !urgent;
+    const roomOn = !this._roomSelfMuted && !urgent;
+    const key = `${tsOn},${roomOn}`;
     if (key !== this._micKey) {
       this._micKey = key;
-      this._send({
-        type: "mic",
-        on: !this._selfMuted,
-        room: !this._roomSelfMuted
-      });
+      this._send({ type: "mic", on: tsOn, room: roomOn });
     }
     this._refreshMuted();
   }
@@ -292,7 +313,7 @@ class VoiceChat {
   // Audio from someone the Storyteller has muted is silenced on every client too,
   // so it holds even if their client ignores it. Town Square and chat mutes are separate.
   _forced(c) {
-    if (c.isHost) return false;
+    if (this.isSt(c.playerId)) return false;
     const theirs = this.chatOf(c.playerId);
     if (theirs) return (theirs.muted || []).includes(c.playerId);
     return this.state.mutedPlayers.includes(c.playerId) || this.state.allMuted;
@@ -384,6 +405,12 @@ class VoiceChat {
     this._send({ type: "chat-visibility", hidden: !!hidden });
   }
 
+  // Storytellers: open a hidden private room, then add players to it from their seat menu
+  openPrivateRoom() {
+    if (!this.state.isHost) return;
+    this._send({ type: "st-room-open" });
+  }
+
   whisper(playerId) {
     if (!this.state.isHost || !playerId) return;
     this._send({ type: "whisper-start", to: playerId });
@@ -395,8 +422,8 @@ class VoiceChat {
   }
 
   // Players: ask the Storyteller for a private chat, in any phase
-  requestStoryteller() {
-    this._send({ type: "chat-request", kind: "st" });
+  requestStoryteller(to) {
+    this._send({ type: "chat-request", kind: "st", to: to || "" });
   }
 
   // Works out which playerIds are muted: in the Town Square (icon by each nameplate)
@@ -407,11 +434,12 @@ class VoiceChat {
     const host = this.state.isHost;
     if (this._playerId) {
       const tsLocked = !host && (this.state.lockedMute || this.state.allMuted);
-      if (this._selfMuted || tsLocked) muted.push(this._playerId);
+      const urgent = this._urgentSelf();
+      if (this._selfMuted || tsLocked || urgent) muted.push(this._playerId);
       const mine = this.chatOf(this._playerId);
       const roomLocked =
         !host && !!mine && (mine.muted || []).includes(this._playerId);
-      if (mine && (this._roomSelfMuted || roomLocked)) {
+      if (mine && (this._roomSelfMuted || roomLocked || urgent)) {
         roomMuted.push(this._playerId);
       }
     }
@@ -424,22 +452,33 @@ class VoiceChat {
       const roomOff = !!peer && peer.roomMicOn === false;
       if (theirs && (roomOff || this._forced(c))) roomMuted.push(c.playerId);
     }
-    const key = muted.join(",") + "|" + roomMuted.join(",");
+    const auto = [this.state.hostPlayerId, this.state.cohostPlayerId].filter(
+      id => id && this._lineAuto(id)
+    );
+    const key =
+      muted.join(",") + "|" + roomMuted.join(",") + "|" + auto.join(",");
     if (key !== this._mutedKey) {
       this._mutedKey = key;
       this.state.mutedIds = muted;
       this.state.roomMutedIds = roomMuted;
+      this.state.lineAutoIds = auto;
     }
   }
 
   // muted by the Storyteller in the Town Square (mute all or one by one)
   _tsForced(c) {
-    if (c.isHost) return false;
+    if (this.isSt(c.playerId)) return false;
     return this.state.mutedPlayers.includes(c.playerId) || this.state.allMuted;
   }
 
   // Storyteller only: change the name shown on the Storyteller token for everyone.
   setHostName(name) {
+    if (this.state.isCoHost) {
+      const own = String(name || "").trim().slice(0, 30) || "Co-Storyteller";
+      this.state.cohostName = own;
+      this._send({ type: "rename", name: own });
+      return;
+    }
     const clean = String(name || "").trim().slice(0, 30) || DEFAULT_HOST_NAME;
     this.state.hostName = clean;
     try {
@@ -453,7 +492,7 @@ class VoiceChat {
   // Storyteller only: mute or unmute every player (the Storyteller stays live).
   setAllMuted(on) {
     if (!this.state.isHost) return;
-    this._applyAllMuted(on);
+    this._applyAllMuted(on, true);
     this._send({ type: "mute-all", on: !!on });
   }
 
@@ -465,8 +504,11 @@ class VoiceChat {
     this.setAllMuted(false);
   }
 
-  _applyAllMuted(on) {
+  // toggled: someone just pressed Mute all / Unmute all (not joining a muted town).
+  // Both Storytellers are muted in the Town Square too, but can unmute themselves.
+  _applyAllMuted(on, toggled = false) {
     on = !!on;
+    if (toggled && this.state.isHost) this._selfMuted = on;
     this.state.allMuted = on;
     // players' Town Square mics follow the Storyteller's toggle; unmuting puts back
     // whatever the player chose for themselves. Private chats are not affected.
@@ -482,7 +524,7 @@ class VoiceChat {
     if (!c) return;
     const peer = this.state.peers.find(p => p.id === id);
     const hear = peer ? peer.hear : true;
-    const silent = !hear || this._forced(c) || !this._audible(c);
+    const silent = !hear || !this._hears(c, peer);
     if (c.boost) {
       // boosted: the audio element stays muted and the gain node plays instead
       c.audio.muted = true;
@@ -527,6 +569,88 @@ class VoiceChat {
     c.boost = null;
   }
 
+  // Whether you hear someone at all: over the Storytellers' line, or where you both are
+  // (and only while their mic is on there, since the line can keep it sending)
+  _hears(c, peer) {
+    if (this._onLine(c)) return true;
+    return !this._forced(c) && this._audible(c) && this._contextMic(c, peer);
+  }
+
+  // Storytellers always hear each other, unless the speaker is muted on the line
+  _onLine(c) {
+    return this.state.isHost && this.isSt(c.playerId) && this._lineOn(c.playerId);
+  }
+
+  _lineOn(playerId) {
+    if (this.state.urgent && this.state.isHost && this.isSt(playerId)) {
+      return !!this.state.cohostPlayerId;
+    }
+    return (
+      this.state.isHost &&
+      !!this.state.cohostPlayerId &&
+      this.isSt(playerId) &&
+      !this.state.lineMuted.includes(playerId) &&
+      !this._lineAuto(playerId)
+    );
+  }
+
+  // A Storyteller who is unmuted in the same place as the other Storyteller (both in the
+  // Town Square, or in the same room) is already heard there, so their line is off for now.
+  // Worked out per Storyteller: it only depends on their own mic and where both of them are.
+  _lineAuto(playerId) {
+    const { hostPlayerId, cohostPlayerId } = this.state;
+    if (!hostPlayerId || !cohostPlayerId) return false;
+    const other = playerId === hostPlayerId ? cohostPlayerId : hostPlayerId;
+    const mine = this.chatOf(playerId);
+    const theirs = this.chatOf(other);
+    const together = (!mine && !theirs) || (!!mine && !!theirs && mine.id === theirs.id);
+    return together && this._placeMicOn(playerId);
+  }
+
+  // Someone's own mute toggle for where they are: their room, or the Town Square
+  _placeMicOn(playerId) {
+    if (playerId === this._playerId) return this.state.micOn;
+    const peer = this.state.peers.find(p => p.playerId === playerId);
+    if (!peer) return false;
+    return this.chatOf(playerId)
+      ? peer.roomMicOn !== false
+      : peer.micOn !== false;
+  }
+
+  // Their own mute toggle for where you hear them: their room, or the Town Square
+  _contextMic(c, peer) {
+    if (!peer) return true;
+    const mine = this.chatOf(this._playerId);
+    const withMe =
+      !!mine &&
+      (mine.members.includes(c.playerId) ||
+        (mine.god || []).includes(c.playerId));
+    const inChat = withMe || !!this.chatOf(c.playerId);
+    return inChat ? peer.roomMicOn !== false : peer.micOn !== false;
+  }
+
+  _urgentSelf() {
+    return this.state.urgent && this.state.isHost && !!this.state.cohostPlayerId;
+  }
+
+  // Storytellers: turn the Urgent Line on or off for both Storytellers
+  setUrgent(on) {
+    if (!this.state.isHost || !this.state.cohostPlayerId) return;
+    this._send({ type: "st-urgent", on: !!on });
+  }
+
+  // Storytellers: mute or unmute yourself or the other Storyteller on your line
+  setLineMuted(playerId, on) {
+    if (!this.state.isHost || !this.isSt(playerId)) return;
+    this._send({ type: "st-line", playerId, on: !!on });
+  }
+
+  _applyLine(muted) {
+    this.state.lineMuted = Array.isArray(muted) ? muted : [];
+    this._applyMic();
+    this._syncAllAudio();
+  }
+
   // Private chats: inside a chat you only hear the people in it, and outside
   // of one you only hear people who are not in a chat.
   _audible(c) {
@@ -534,8 +658,8 @@ class VoiceChat {
     const theirs = this.chatOf(c.playerId);
     if (mine) {
       if (theirs && theirs.id === mine.id) return true;
-      // the Storyteller sitting in your room unseen
-      return c.isHost && !!mine.god;
+      // a Storyteller sitting in your room unseen
+      return (mine.god || []).includes(c.playerId);
     }
     if (theirs) return false;
     return !this.state.busy.includes(c.playerId);
@@ -544,6 +668,57 @@ class VoiceChat {
   chatOf(playerId) {
     if (!playerId) return null;
     return this.state.chats.find(c => c.members.includes(playerId)) || null;
+  }
+
+  // The Storyteller or the co-Storyteller
+  isSt(playerId) {
+    return (
+      !!playerId &&
+      (playerId === this.state.hostPlayerId ||
+        playerId === this.state.cohostPlayerId)
+    );
+  }
+
+  // ---- co-Storyteller ----
+
+  // An unseated player asks the Storyteller to become the co-Storyteller
+  requestCohost(name) {
+    if (this.state.isHost) return;
+    this._send({ type: "cohost-request", name: String(name || "").slice(0, 30) });
+  }
+
+  // The Storyteller removes the co-Storyteller, or the co-Storyteller steps down
+  removeCohost() {
+    if (!this.state.isHost) return;
+    this._send({ type: "cohost-remove" });
+  }
+
+  // Storytellers: take a player out of whatever private chat they are in
+  kick(playerId) {
+    if (!this.state.isHost || !playerId) return;
+    this._send({ type: "chat-kick", playerId });
+  }
+
+  // Grimoire changes for the other Storyteller (see socket.js)
+  sendStSync(data) {
+    if (!this.state.isHost || !this.state.cohostPlayerId) return;
+    this._send({ type: "st-sync", data });
+  }
+
+  // force: on welcome, so a co-Storyteller removed while disconnected finds out too
+  _setCohost(info, force = false) {
+    const pid = (info && info.playerId) || "";
+    this.state.cohostPlayerId = pid;
+    this.state.cohostName = pid ? info.name || "Co-Storyteller" : "";
+    const me = !!pid && pid === this._playerId;
+    if (!this._joinedAsHost && (force || me !== this.state.isCoHost)) {
+      this.state.isCoHost = me;
+      this.state.isHost = me;
+      if (this.onCohost) this.onCohost(me);
+    }
+    this._applyMic();
+    this._syncAllAudio();
+    this._refreshMuted();
   }
 
   _syncAllAudio() {
@@ -685,6 +860,9 @@ class VoiceChat {
       } else {
         this._applyAllMuted(msg.allMuted);
       }
+      this.state.lineMuted = msg.lineMuted || [];
+      this.state.urgent = !!msg.urgent;
+      this._setCohost(msg.cohost, true);
       // the newcomer starts the call with everyone already here
       for (const p of msg.peers) {
         const conn = this._makePeer(p.id, p);
@@ -699,9 +877,10 @@ class VoiceChat {
     } else if (msg.type === "peer-joined") {
       this._names.set(msg.id, msg);
     } else if (msg.type === "mute-all") {
-      this._applyAllMuted(msg.on);
+      this._applyAllMuted(msg.on, true);
     } else if (msg.type === "peer-mic") {
       this._patch(msg.id, { micOn: !!msg.on, roomMicOn: msg.room !== false });
+      this._syncAudio(msg.id);
       this._refreshMuted();
     } else if (msg.type === "phase") {
       if (msg.phase === "day" && this._serverPhase && this._serverPhase !== "day") {
@@ -718,6 +897,16 @@ class VoiceChat {
     } else if (msg.type === "grimoire") {
       if (this.onGrimoire) this.onGrimoire(msg.players || []);
       this.state.grimoirePulse++;
+    } else if (msg.type === "cohost") {
+      this._setCohost(msg);
+    } else if (msg.type === "st-urgent") {
+      this.state.urgent = !!msg.on;
+      this._applyMic();
+      this._syncAllAudio();
+    } else if (msg.type === "st-line") {
+      this._applyLine(msg.muted);
+    } else if (msg.type === "st-sync") {
+      if (this.state.isHost && this.onStSync) this.onStSync(msg.data || {});
     } else if (msg.type === "player-muted") {
       this._applyPlayerMuted(msg.playerId, !!msg.on);
     } else if (msg.type === "chats") {
@@ -726,7 +915,7 @@ class VoiceChat {
       this._onChatsChanged();
     } else if (msg.type === "chat-request") {
       const known = this.state.incoming.some(r => r.id === msg.id);
-      const req = { id: msg.id, kind: msg.kind, from: msg.from, chatId: msg.chatId, num: msg.num, hold: !!msg.hold };
+      const req = { id: msg.id, kind: msg.kind, from: msg.from, chatId: msg.chatId, num: msg.num, hold: !!msg.hold, name: msg.name || "" };
       // a request already showing just changes in place (on hold / off hold)
       this.state.incoming = known
         ? this.state.incoming.map(r => (r.id === msg.id ? req : r))
@@ -756,6 +945,9 @@ class VoiceChat {
       if (peer) {
         peer.name = msg.name;
         if (peer.isHost) this.state.hostName = msg.name;
+        else if (peer.playerId && peer.playerId === this.state.cohostPlayerId) {
+          this.state.cohostName = msg.name;
+        }
       }
     } else if (msg.type === "peer-left") {
       this._removePeer(msg.id);
@@ -1035,8 +1227,8 @@ class VoiceChat {
 
   _setOutgoing(track) {
     if (!track || track === this._track) return;
-    track.enabled = this.state.micOn;
-    if (this._rawTrack) this._rawTrack.enabled = this.state.micOn;
+    track.enabled = this._trackOn;
+    if (this._rawTrack) this._rawTrack.enabled = this._trackOn;
     this._track = track;
     for (const [id, c] of this._conns) {
       const peer = this.state.peers.find(p => p.id === id);
@@ -1075,13 +1267,17 @@ class VoiceChat {
   // Runs every 100ms: updates your mic meter and works out who is talking.
   _tick() {
     const now = Date.now();
-    const level = this.state.micOn ? this._levelOf(this._selfMeter) : 0;
+    const level = this._trackOn ? this._levelOf(this._selfMeter) : 0;
     if (level !== this.state.level) this.state.level = level;
-    if (this.state.micOn && level >= SPEAKING_LEVEL) this._selfLoud = now;
+    if (this._trackOn && level >= SPEAKING_LEVEL) this._selfLoud = now;
 
+    // the portrait ring is for the Town Square and rooms; the line button lights
+    // whenever the Storytellers' line is carrying your voice (both can be lit)
     const speaking = [];
+    const lineSpeaking = [];
     if (this._playerId && now - this._selfLoud < SPEAKING_HOLD_MS) {
-      speaking.push(this._playerId);
+      if (this.state.micOn) speaking.push(this._playerId);
+      if (this._lineOn(this._playerId)) lineSpeaking.push(this._playerId);
     }
     for (const [id, c] of this._conns) {
       // Each peer is judged on its own, using whichever signal is louder, so any
@@ -1090,12 +1286,18 @@ class VoiceChat {
       if (peerLevel >= SPEAKING_LEVEL) c.lastLoud = now;
       const isSpeaking = now - c.lastLoud < SPEAKING_HOLD_MS;
       this._patch(id, { speaking: isSpeaking });
-      if (isSpeaking && c.playerId && this._audible(c)) speaking.push(c.playerId);
+      if (!isSpeaking || !c.playerId) continue;
+      const peer = this.state.peers.find(p => p.id === id);
+      const where =
+        !this._forced(c) && this._audible(c) && this._contextMic(c, peer);
+      if (where) speaking.push(c.playerId);
+      if (this._onLine(c)) lineSpeaking.push(c.playerId);
     }
-    const key = speaking.join(",");
+    const key = speaking.join(",") + "|" + lineSpeaking.join(",");
     if (key !== this._speakingKey) {
       this._speakingKey = key;
       this.state.speakingIds = speaking;
+      this.state.lineSpeakingIds = lineSpeaking;
     }
   }
 
@@ -1163,6 +1365,14 @@ class VoiceChat {
     clearInterval(this._levelTimer);
     this.state.hostPlayerId = "";
     this.state.isHost = false;
+    this.state.isCoHost = false;
+    this.state.cohostPlayerId = "";
+    this.state.cohostName = "";
+    this.state.lineMuted = [];
+    this.state.lineAutoIds = [];
+    this.state.urgent = false;
+    this._trackOn = true;
+    this._joinedAsHost = false;
     this.state.allMuted = false;
     if (this._unlockHandler) {
       ["pointerdown", "keydown"].forEach(ev =>
@@ -1192,6 +1402,7 @@ class VoiceChat {
     this.state.level = 0;
     this.state.peers = [];
     this.state.speakingIds = [];
+    this.state.lineSpeakingIds = [];
     this.state.mutedIds = [];
     this._mutedKey = "";
     this.state.handIds = [];
@@ -1208,6 +1419,7 @@ class VoiceChat {
     this._roomKey = "";
     this._micKey = "";
     this.state.roomMicOn = true;
+    this.state.tsMicOn = true;
     this.state.roomMutedIds = [];
     this.state.micLocked = false;
     this.state.incoming = [];
