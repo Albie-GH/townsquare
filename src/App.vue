@@ -35,6 +35,8 @@
     <NightOrderModal />
     <VoteHistoryModal />
     <GameStateModal />
+    <NotepadModal />
+    <SheetsMenu />
     <Gradients />
     <span id="version">v{{ version }}</span>
   </div>
@@ -56,10 +58,15 @@ import NightOrderModal from "./components/modals/NightOrderModal";
 import FabledModal from "@/components/modals/FabledModal";
 import VoteHistoryModal from "@/components/modals/VoteHistoryModal";
 import GameStateModal from "@/components/modals/GameStateModal";
+import voice from "./voice";
+import NotepadModal from "@/components/modals/NotepadModal";
+import SheetsMenu from "@/components/SheetsMenu";
 
 export default {
   components: {
     GameStateModal,
+    NotepadModal,
+    SheetsMenu,
     VoteHistoryModal,
     FabledModal,
     NightOrderModal,
@@ -103,6 +110,13 @@ export default {
           break;
         case "n":
           this.$store.commit("toggleModal", "nightOrder");
+          break;
+        case "p":
+          this.$store.commit("toggleModal", "notepad");
+          break;
+        case "m":
+          // your mic wherever you are: your private chat, or the Town Square
+          if (voice.state.joined) voice.toggleMic();
           break;
         case "e":
           if (this.session.isSpectator) return;

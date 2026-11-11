@@ -18,7 +18,20 @@
           :key="id"
           :class="{ speaking: voice.speakingIds.includes(id) }"
         >
-          {{ nameOf(id) }}
+          <span class="name">{{ nameOf(id) }}</span>
+          <em v-if="isHidden(stRoom, id)">(unseen)</em>
+          <font-awesome-icon
+            v-if="showMic(id)"
+            class="mic"
+            :class="{
+              muted: roomMuted(id),
+              clickable: canToggle(id),
+              locked: lockedBySt(stRoom, id)
+            }"
+            :icon="roomMuted(id) ? 'microphone-slash' : 'microphone'"
+            :title="micTitle(stRoom, id)"
+            @click.stop="toggleMic(stRoom, id)"
+          />
         </li>
       </ul>
       <div class="action" v-if="openId === stRoom.id">
@@ -50,13 +63,33 @@
           :key="id"
           :class="{ speaking: voice.speakingIds.includes(id) }"
         >
-          {{ nameOf(id) }}
+          <span class="name">{{ nameOf(id) }}</span>
+          <em v-if="isHidden(chat, id)">(unseen)</em>
+          <font-awesome-icon
+            v-if="showMic(id)"
+            class="mic"
+            :class="{
+              muted: roomMuted(id),
+              clickable: canToggle(id),
+              locked: lockedBySt(chat, id)
+            }"
+            :icon="roomMuted(id) ? 'microphone-slash' : 'microphone'"
+            :title="micTitle(chat, id)"
+            @click.stop="toggleMic(chat, id)"
+          />
         </li>
       </ul>
       <div class="action" v-if="openId === chat.id">
-        <span v-if="myChat && myChat.id === chat.id" @click.stop="leave">
-          <font-awesome-icon icon="sign-out-alt" /> Leave room
-        </span>
+        <template v-if="myChat && myChat.id === chat.id">
+          <!-- Storyteller: show yourself to the room, or slip out of view -->
+          <span v-if="voice.isHost" @click.stop="setHidden(!voice.invisible)">
+            <font-awesome-icon icon="comments" />
+            {{ voice.invisible ? "Become visible" : "Go invisible" }}
+          </span>
+          <span @click.stop="leave">
+            <font-awesome-icon icon="sign-out-alt" /> Leave room
+          </span>
+        </template>
         <template v-else-if="voice.isHost">
           <span @click.stop="joinAs(chat, false)">
             <font-awesome-icon icon="comments" /> Join
@@ -101,9 +134,46 @@ export default {
     }
   },
   methods: {
-    // the Storyteller can sit in a room without being listed
+    // the Storyteller can sit in a room without being listed (they still see themselves)
     shown(chat) {
+      if (this.voice.isHost) return chat.members;
       return chat.members.filter(id => !(chat.hidden || []).includes(id));
+    },
+    isHidden(chat, id) {
+      return (chat.hidden || []).includes(id);
+    },
+    me() {
+      return this.$store.state.session.playerId;
+    },
+    // private chat mutes are separate from the Town Square ones
+    roomMuted(id) {
+      return this.voice.roomMutedIds.includes(id);
+    },
+    // the Storyteller muted this person in the room
+    lockedBySt(chat, id) {
+      return (chat.muted || []).includes(id);
+    },
+    // your own toggle, every toggle for the Storyteller, otherwise just a muted icon
+    canToggle(id) {
+      return id === this.me() || this.voice.isHost;
+    },
+    showMic(id) {
+      if (id === this.me()) return this.myChat && this.myChat.members.includes(id);
+      return this.voice.isHost || this.roomMuted(id);
+    },
+    micTitle(chat, id) {
+      if (id === this.me()) {
+        if (this.voice.micLocked) return "Muted by the Storyteller";
+        return this.roomMuted(id) ? "Unmute yourself" : "Mute yourself";
+      }
+      if (this.voice.isHost) {
+        return this.lockedBySt(chat, id) ? "Unmute in this room" : "Mute in this room";
+      }
+      return this.lockedBySt(chat, id) ? "Muted by the Storyteller" : "Muted";
+    },
+    toggleMic(chat, id) {
+      if (id === this.me()) voice.toggleRoomMic();
+      else if (this.voice.isHost) voice.setRoomMuted(id, !this.lockedBySt(chat, id));
     },
     toggle(chat) {
       this.openId = this.openId === chat.id ? 0 : chat.id;
@@ -119,6 +189,10 @@ export default {
     join(chat) {
       this.openId = 0;
       voice.requestJoin(chat.id);
+    },
+    setHidden(hidden) {
+      this.openId = 0;
+      voice.setHidden(hidden);
     },
     joinAs(chat, hidden) {
       this.openId = 0;
@@ -180,10 +254,41 @@ export default {
       font-size: 90%;
       color: white;
       li {
-        overflow: hidden;
-        text-overflow: ellipsis;
+        display: flex;
+        align-items: center;
+        gap: 4px;
         white-space: nowrap;
         transition: color 150ms;
+        .name {
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        em {
+          font-style: normal;
+          opacity: 0.6;
+          font-size: 85%;
+        }
+        .mic {
+          flex-shrink: 0;
+          width: 12px;
+          margin-left: auto; // right-aligned in the room box
+          color: white;
+          opacity: 0.8;
+          cursor: default;
+          &.muted {
+            color: #ff6b6b;
+            opacity: 1;
+          }
+          &.locked {
+            filter: drop-shadow(0 0 2px red);
+          }
+          &.clickable {
+            cursor: pointer;
+            &:hover {
+              color: red;
+            }
+          }
+        }
         &.speaking {
           color: #3ddc84;
           font-weight: bold;

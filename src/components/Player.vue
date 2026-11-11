@@ -13,7 +13,8 @@
           'vote-lock': voteLocked,
           speaking,
           'hand-up': handUp,
-          'has-mic': showMic
+          'has-mic': showMic,
+          'out-of-room': outOfRoom
         },
         player.role.team
       ]"
@@ -144,13 +145,11 @@
             <li @click="addRoleIcon">
               <font-awesome-icon icon="theater-masks" />Select role
             </li>
-            <li @click="toggleMutePlayer" v-if="player.id && voice.joined">
-              <font-awesome-icon
-                :icon="playerMuted ? 'microphone' : 'microphone-slash'"
-              />{{ playerMuted ? "Unmute player" : "Mute player" }}
-            </li>
             <li @click="sendBluffs" v-if="canSendBluffs">
               <font-awesome-icon icon="theater-masks" />Send Demon Bluffs
+            </li>
+            <li @click="sendGrimoire" v-if="canSendGrimoire">
+              <font-awesome-icon icon="book-open" />Send Grimoire
             </li>
             <li @click="startWhisper" v-if="canWhisper">
               <font-awesome-icon icon="comments" />Private chat
@@ -161,7 +160,10 @@
             <li @click="removeMark" v-if="session.markedPlayer === index">
               <font-awesome-icon icon="skull" />Remove mark
             </li>
-            <li @click="nominatePlayer()" v-if="!session.nomination">
+            <li
+              @click="nominatePlayer()"
+              v-if="!session.nomination && voice.phase === 'dusk'"
+            >
               <font-awesome-icon icon="hand-point-right" />Nomination
             </li>
           </template>
@@ -220,6 +222,11 @@
             >
               <font-awesome-icon icon="chair" />
               Empty seat
+            </li>
+            <li @click="toggleMutePlayer" v-if="player.id && voice.joined">
+              <font-awesome-icon
+                :icon="playerMuted ? 'microphone' : 'microphone-slash'"
+              />{{ playerMuted ? "Unmute player" : "Mute player" }}
             </li>
           </template>
           <li
@@ -291,6 +298,9 @@ import Token from "./Token";
 import { mapGetters, mapState } from "vuex";
 import voice from "../voice";
 
+// characters that get to see the Grimoire (add "widow" etc. here)
+const GRIMOIRE_ROLES = ["spy"];
+
 export default {
   components: {
     Token
@@ -329,6 +339,16 @@ export default {
         !(this.myChat && this.theirChat && this.myChat.id === this.theirChat.id)
       );
     },
+    // the Storyteller can show the Spy the Grimoire as it is right now
+    canSendGrimoire: function() {
+      return (
+        !this.session.isSpectator &&
+        this.voice.joined &&
+        !!this.player.id &&
+        !!this.player.role &&
+        GRIMOIRE_ROLES.includes(this.player.role.id)
+      );
+    },
     // the Storyteller can hand the demon the bluffs they have set
     canSendBluffs: function() {
       return (
@@ -353,6 +373,11 @@ export default {
     theirChat: function() {
       return voice.chatOf(this.player.id);
     },
+    // while you're in a private chat, everyone not in it is darkened
+    outOfRoom: function() {
+      if (!this.myChat) return false;
+      return !(this.theirChat && this.theirChat.id === this.myChat.id);
+    },
     chatTarget: function() {
       return (
         this.session.isSpectator &&
@@ -362,8 +387,9 @@ export default {
         !this.isYou
       );
     },
+    // asking someone already in a chat puts you on hold until they answer
     canRequestChat: function() {
-      return this.chatTarget && !this.myChat && !this.theirChat;
+      return this.chatTarget && !this.myChat;
     },
     canInvite: function() {
       return (
@@ -408,8 +434,10 @@ export default {
       if (!this.isYou) {
         return this.voice.allMuted ? "Muted by the Storyteller" : "Muted";
       }
-      if (this.micLocked) return "Muted by the Storyteller";
-      return this.voice.micOn ? "Mute yourself" : "Unmute yourself";
+      if (this.micLocked && this.isMuted) return "Muted by the Storyteller";
+      return this.isMuted
+        ? "Unmute yourself in the Town Square"
+        : "Mute yourself in the Town Square";
     },
     volume: function() {
       const v = this.voice.volumes[this.player.id];
@@ -452,7 +480,14 @@ export default {
         this.updatePlayer("pronouns", pronouns, true);
       }
     },
+    // asks the Storyteller before marking someone dead
+    confirmDeath() {
+      const name = this.player.name || "this player";
+      return confirm(`Mark ${name} as dead?`);
+    },
     toggleStatus() {
+      if (this.session.isSpectator) return;
+      if (!this.player.isDead && !this.confirmDeath()) return;
       if (this.grimoire.isPublic) {
         if (!this.player.isDead) {
           this.updatePlayer("isDead", true);
@@ -516,13 +551,21 @@ export default {
     nominatePlayer(player) {
       this.isMenuOpen = false;
       this.isTokenMenuOpen = false;
+      // no player passed = this seat is starting a nomination; dead players can't nominate
+      if (
+        !player &&
+        this.player.isDead &&
+        !confirm("This player is dead and cannot nominate, continue?")
+      ) {
+        return;
+      }
       this.$emit("trigger", ["nominatePlayer", player]);
     },
     cancel() {
       this.$emit("trigger", ["cancel"]);
     },
     toggleMutePlayer() {
-      this.isTokenMenuOpen = false;
+      this.isMenuOpen = false;
       voice.setPlayerMuted(this.player.id, !this.playerMuted);
     },
     claimSeat() {
@@ -530,8 +573,9 @@ export default {
       this.isTokenMenuOpen = false;
       this.$emit("trigger", ["claimSeat"]);
     },
+    // the seat toggle is your Town Square mute; private chats have their own
     toggleMic() {
-      voice.toggleMic();
+      voice.toggleTsMic();
     },
     // Players: your own circle raises / lowers your hand, someone else's opens a menu.
     // The Storyteller keeps the old behaviour and opens the role picker.
@@ -561,6 +605,20 @@ export default {
         return role.isCustom ? role : { id: role.id };
       });
       voice.sendBluffs(this.player.id, roles);
+    },
+    sendGrimoire() {
+      this.isTokenMenuOpen = false;
+      const seats = this.players.map(p => ({
+        role:
+          p.role && p.role.id ? (p.role.isCustom ? p.role : { id: p.role.id }) : null,
+        reminders: (p.reminders || []).map(r => ({
+          role: r.role,
+          name: r.name,
+          image: r.image,
+          imageAlt: r.imageAlt
+        }))
+      }));
+      voice.sendGrimoire(this.player.id, seats);
     },
     startWhisper() {
       this.isTokenMenuOpen = false;
@@ -729,6 +787,17 @@ export default {
 
   &.traveler .life {
     filter: grayscale(100%);
+  }
+
+  // not in your private chat
+  &.out-of-room {
+    .life,
+    .token {
+      filter: brightness(0.35);
+    }
+    &.traveler .life {
+      filter: grayscale(100%) brightness(0.35);
+    }
   }
 }
 
@@ -1094,9 +1163,12 @@ li.move:not(.from) .player .overlay svg.move {
   height: 80%;
 }
 
-.player .token-menu {
+// only as tall as its options: must beat ".player > .menu { bottom: ... }" below
+// (and in media.scss), or the menu stretches from top: 20% down to the nameplate
+.player > .menu.token-menu {
   bottom: auto;
   top: 20%;
+  height: auto;
   &:before {
     bottom: auto;
     top: 8px;

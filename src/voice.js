@@ -1,4 +1,5 @@
 import Vue from "vue";
+import { playSound } from "./sounds";
 
 const ICE = {
   iceServers: [
@@ -22,20 +23,10 @@ function loadHostName() {
   }
 }
 
-const RNNOISE_KEY = "botcRnnoise";
 const RNNOISE_URL = (process.env.BASE_URL || "/") + "rnnoise/";
-
-function loadRnnoisePref() {
-  try {
-    return localStorage.getItem(RNNOISE_KEY) !== "off";
-  } catch (e) {
-    return true;
-  }
-}
 
 const GATE_KEY = "botcNoiseGate";
 const DEFAULT_GATE = 80; // noise gate strength until the player picks their own
-const BROWSER_NS_KEY = "botcBrowserNs";
 
 function loadGatePref() {
   try {
@@ -43,14 +34,6 @@ function loadGatePref() {
     return saved === null ? DEFAULT_GATE : parseInt(saved, 10) || 0;
   } catch (e) {
     return DEFAULT_GATE;
-  }
-}
-
-function loadBrowserNsPref() {
-  try {
-    return localStorage.getItem(BROWSER_NS_KEY) !== "off";
-  } catch (e) {
-    return true;
   }
 }
 
@@ -92,22 +75,33 @@ class VoiceChat {
       busy: [], // playerIds in a private Storyteller chat, nobody outside can hear them
       invisible: false, // Storyteller: sitting in a room unseen, mic locked off
       mutedPlayers: [], // playerIds the Storyteller has muted one by one
-      lockedMute: false, // the Storyteller has muted you personally
+      lockedMute: false, // the Storyteller has muted you personally (Town Square)
+      roomMicOn: true, // your own mute toggle inside a private chat
+      roomMutedIds: [], // playerIds muted inside their private chat
+      micLocked: false, // the Storyteller has muted you where you are right now
       bluffsPulse: 0, // goes up each time the Storyteller sends you demon bluffs
+      grimoirePulse: 0, // goes up each time the Storyteller sends you the Grimoire
       incoming: [], // requests waiting for your answer
       notice: null, // latest status of a request you made
-      rnnoise: loadRnnoisePref(), // RNNoise noise suppression switched on
+      rnnoise: true, // RNNoise noise suppression, always on
       rnnoiseStatus: "off", // off | loading | waiting | on | unsupported | error
-      browserNs: loadBrowserNsPref(), // also use the browser's own noise filter
+      browserNs: true, // also use the browser's own noise filter, always on
       gate: loadGatePref() // noise gate strength 0-100, 0 = off
     });
     this._mutedKey = "";
     this._handKey = "";
     this._noticeTimer = null;
-    this._invisible = false;
-    this._micBefore = true;
-    this._wasWhisper = false;
+    // Muting is separate in the Town Square and in private chats:
+    // _selfMuted is your Town Square choice, _roomSelfMuted your choice in the chat you are in
+    this._roomSelfMuted = false;
+    this._roomKey = ""; // which chat (and whether unseen) your room mute belongs to
+    this._micKey = ""; // last mic state sent to the server
+    this._selfMuted = false; // the player muted themselves; Storyteller unmutes keep it
+    this._prevChat = null; // { id, members } of your own chat, to hear people come and go
+    this._bellTimer = null; // rings the bell 5 seconds before the chat timer ends
+    this._serverPhase = ""; // last phase the server told us about, to ring the bell on day
     this.onBluffs = null; // set by socket.js, stores the bluffs you were sent
+    this.onGrimoire = null; // set by socket.js, shows the Grimoire you were sent
     this._levelTimer = null;
     this._pollingLevels = false;
     this._busy = false;
@@ -202,22 +196,65 @@ class VoiceChat {
     this._teardown("");
   }
 
+  // Your mic where you are right now: in your private chat if you are in one, else the Town Square
   toggleMic() {
-    if (!this._track) return;
-    // players can't unmute themselves while the Storyteller has everyone muted
-    if (this.state.isHost && this.state.invisible) return;
-    if (!this.state.isHost && this.state.lockedMute) return;
-    if (this.state.allMuted && !this.state.isHost && !this._inWhisper()) return;
-    this._setMic(!this._track.enabled);
+    if (this.chatOf(this._playerId)) this.toggleRoomMic();
+    else this.toggleTsMic();
   }
 
-  // Turns your mic on or off, tells everyone else, and refreshes the muted list.
-  _setMic(on) {
+  // Town Square mute (your seat / Storyteller token). Players can always mute,
+  // but can't unmute while the Storyteller has them muted.
+  toggleTsMic() {
     if (!this._track) return;
-    this._track.enabled = on;
-    if (this._rawTrack) this._rawTrack.enabled = on;
+    const locked =
+      !this.state.isHost && (this.state.lockedMute || this.state.allMuted);
+    if (locked && this._selfMuted) return;
+    this._selfMuted = !this._selfMuted;
+    this._applyMic();
+  }
+
+  // Private chat mute (next to your name in the room)
+  toggleRoomMic() {
+    if (!this._track) return;
+    const mine = this.chatOf(this._playerId);
+    if (!mine) return;
+    const locked =
+      !this.state.isHost && (mine.muted || []).includes(this._playerId);
+    if (locked && this._roomSelfMuted) return;
+    this._roomSelfMuted = !this._roomSelfMuted;
+    this._applyMic();
+  }
+
+  // Works out whether your mic should be live, applies it, and tells everyone your
+  // Town Square and private chat mute toggles.
+  _applyMic() {
+    const mine = this.chatOf(this._playerId);
+    const host = this.state.isHost;
+    let locked;
+    let on;
+    if (mine) {
+      locked = !host && (mine.muted || []).includes(this._playerId);
+      on = !this._roomSelfMuted && !locked;
+    } else {
+      locked = !host && (this.state.lockedMute || this.state.allMuted);
+      on = !this._selfMuted && !locked;
+    }
+    this.state.micLocked = locked;
+    this.state.roomMicOn = !this._roomSelfMuted;
+    if (this._track) {
+      this._track.enabled = on;
+      if (this._rawTrack) this._rawTrack.enabled = on;
+    }
     this.state.micOn = on;
-    this._send({ type: "mic", on });
+    const key = `${!this._selfMuted},${!this._roomSelfMuted}`;
+    if (key !== this._micKey) {
+      this._micKey = key;
+      this._send({
+        type: "mic",
+        on: !this._selfMuted,
+        room: !this._roomSelfMuted
+      });
+    }
     this._refreshMuted();
   }
 
@@ -252,34 +289,19 @@ class VoiceChat {
     }
   }
 
-  // Changes your own mic without telling anyone (used for private chats, so
-  // other players can't tell who the Storyteller has pulled aside).
-  _setMicQuiet(on) {
-    if (!this._track) return;
-    this._track.enabled = on;
-    if (this._rawTrack) this._rawTrack.enabled = on;
-    this.state.micOn = on;
-    this._refreshMuted();
-  }
-
-  _inWhisper() {
-    const mine = this.chatOf(this._playerId);
-    return !!(mine && mine.whisper);
-  }
-
-  // the people you can see a mute-all exemption for: nobody, unless you share a private Storyteller chat
-  _sameWhisper(c) {
-    const mine = this.chatOf(this._playerId);
-    const theirs = this.chatOf(c.playerId);
-    return !!(mine && mine.whisper && theirs && theirs.id === mine.id);
-  }
-
+  // Audio from someone the Storyteller has muted is silenced on every client too,
+  // so it holds even if their client ignores it. Town Square and chat mutes are separate.
   _forced(c) {
     if (c.isHost) return false;
-    return (
-      this.state.mutedPlayers.includes(c.playerId) ||
-      (this.state.allMuted && !this._sameWhisper(c))
-    );
+    const theirs = this.chatOf(c.playerId);
+    if (theirs) return (theirs.muted || []).includes(c.playerId);
+    return this.state.mutedPlayers.includes(c.playerId) || this.state.allMuted;
+  }
+
+  // Storyteller only: mute or unmute someone inside their private chat.
+  setRoomMuted(playerId, on) {
+    if (!this.state.isHost || !playerId) return;
+    this._send({ type: "room-mute", playerId, on: !!on });
   }
 
   // Storyteller only: mute or unmute one player.
@@ -303,38 +325,38 @@ class VoiceChat {
     const locked = this.state.mutedPlayers.includes(this._playerId);
     if (locked === this.state.lockedMute) return;
     this.state.lockedMute = locked;
-    if (!this._track || this.state.isHost) return;
-    if (locked) this._setMic(false);
-    else if (!this.state.allMuted) this._setMic(true);
-    else this._setMicQuiet(this._inWhisper());
+    this._applyMic();
   }
 
   // Runs whenever the list of chats changes.
   _onChatsChanged() {
     const mine = this.chatOf(this._playerId);
-    if (this.state.isHost) {
-      // coming out of a private chat: mute so nothing slips out to the table
-      const inWhisper = !!(mine && mine.whisper);
-      if (this._wasWhisper && !inWhisper && !this.state.invisible) {
-        this._setMic(false);
-      }
-      this._wasWhisper = inWhisper;
-      const hidden = !!(mine && mine.hidden && mine.hidden.includes(this._playerId));
-      if (hidden && !this._invisible) {
-        this._invisible = true;
-        this._micBefore = this.state.micOn;
-        this._setMicQuiet(false);
-      } else if (!hidden && this._invisible) {
-        this._invisible = false;
-        this._setMicQuiet(this._micBefore);
-      }
-      this.state.invisible = hidden;
-    } else if (this.state.allMuted && this._track) {
-      // while everyone is muted, only people in a Storyteller chat can talk
-      this._setMicQuiet(!!(mine && mine.whisper) && !this.state.lockedMute);
+    this._chatSounds(mine);
+    // once you are in a chat, any request you were waiting on is gone
+    const n = this.state.notice;
+    if (mine && n && (n.status === "hold" || n.status === "sent")) this._setNotice(null);
+    // a new chat starts unmuted; the Storyteller joining unseen starts muted
+    const hidden = !!(mine && (mine.hidden || []).includes(this._playerId));
+    const key = mine ? `${mine.id}:${hidden}` : "";
+    if (key !== this._roomKey) {
+      this._roomKey = key;
+      this._roomSelfMuted = hidden;
     }
+    this.state.invisible = hidden;
+    this._applyMic();
     this._syncAllAudio();
     this._refreshMuted();
+  }
+
+  // enter.mp3 when you (or someone else) come into your chat, leave.mp3 when anyone goes
+  _chatSounds(mine) {
+    const prev = this._prevChat;
+    this._prevChat = mine ? { id: mine.id, members: [...mine.members] } : null;
+    if (!prev && !mine) return;
+    if (!prev || (mine && mine.id !== prev.id)) return playSound("enter");
+    if (!mine) return playSound("leave");
+    if (mine.members.some(m => !prev.members.includes(m))) playSound("enter");
+    else if (prev.members.some(m => !mine.members.includes(m))) playSound("leave");
   }
 
   // Storyteller only: send the three demon bluffs to the demon's Other Characters tray
@@ -343,10 +365,23 @@ class VoiceChat {
     this._send({ type: "send-bluffs", to: playerId, roles });
   }
 
+  // Storyteller only: show one player (the Spy) every seat's character and reminder tokens
+  sendGrimoire(playerId, seats) {
+    if (!this.state.isHost || !playerId) return;
+    this._send({ type: "send-grimoire", to: playerId, players: seats });
+  }
+
   // Storyteller only
   joinChat(chatId, hidden) {
     if (!this.state.isHost) return;
     this._send({ type: "chat-join", chatId, hidden: !!hidden });
+  }
+
+  // Storyteller only: become visible in the room you're in, or go invisible again.
+  // Players see you come in or leave (with the enter / leave sounds).
+  setHidden(hidden) {
+    if (!this.state.isHost) return;
+    this._send({ type: "chat-visibility", hidden: !!hidden });
   }
 
   whisper(playerId) {
@@ -364,21 +399,43 @@ class VoiceChat {
     this._send({ type: "chat-request", kind: "st" });
   }
 
-  // Works out which playerIds are muted, for the muted icon by each nameplate.
+  // Works out which playerIds are muted: in the Town Square (icon by each nameplate)
+  // and inside private chats (icon by each name in the room list).
   _refreshMuted() {
     const muted = [];
-    if (this._playerId && !this.state.micOn) muted.push(this._playerId);
+    const roomMuted = [];
+    const host = this.state.isHost;
+    if (this._playerId) {
+      const tsLocked = !host && (this.state.lockedMute || this.state.allMuted);
+      if (this._selfMuted || tsLocked) muted.push(this._playerId);
+      const mine = this.chatOf(this._playerId);
+      const roomLocked =
+        !host && !!mine && (mine.muted || []).includes(this._playerId);
+      if (mine && (this._roomSelfMuted || roomLocked)) {
+        roomMuted.push(this._playerId);
+      }
+    }
     for (const [id, c] of this._conns) {
       if (!c.playerId) continue;
       const peer = this.state.peers.find(p => p.id === id);
-      const selfMuted = peer && peer.micOn === false;
-      if (selfMuted || this._forced(c)) muted.push(c.playerId);
+      const tsOff = !!peer && peer.micOn === false;
+      if (tsOff || this._tsForced(c)) muted.push(c.playerId);
+      const theirs = this.chatOf(c.playerId);
+      const roomOff = !!peer && peer.roomMicOn === false;
+      if (theirs && (roomOff || this._forced(c))) roomMuted.push(c.playerId);
     }
-    const key = muted.join(",");
+    const key = muted.join(",") + "|" + roomMuted.join(",");
     if (key !== this._mutedKey) {
       this._mutedKey = key;
       this.state.mutedIds = muted;
+      this.state.roomMutedIds = roomMuted;
     }
+  }
+
+  // muted by the Storyteller in the Town Square (mute all or one by one)
+  _tsForced(c) {
+    if (c.isHost) return false;
+    return this.state.mutedPlayers.includes(c.playerId) || this.state.allMuted;
   }
 
   // Storyteller only: change the name shown on the Storyteller token for everyone.
@@ -411,12 +468,9 @@ class VoiceChat {
   _applyAllMuted(on) {
     on = !!on;
     this.state.allMuted = on;
-    // players' mics follow the Storyteller's toggle; the Storyteller is exempt
-    if (!this.state.isHost && this._track) {
-      if (this.state.lockedMute) this._setMic(false);
-      else if (on && this._inWhisper()) this._setMicQuiet(true);
-      else this._setMic(!on);
-    }
+    // players' Town Square mics follow the Storyteller's toggle; unmuting puts back
+    // whatever the player chose for themselves. Private chats are not affected.
+    this._applyMic();
     // also silence incoming audio from muted players, so it holds even if
     // someone's client ignores the mute
     for (const id of this._conns.keys()) this._syncAudio(id);
@@ -437,7 +491,11 @@ class VoiceChat {
   _audible(c) {
     const mine = this.chatOf(this._playerId);
     const theirs = this.chatOf(c.playerId);
-    if (mine) return !!theirs && theirs.id === mine.id;
+    if (mine) {
+      if (theirs && theirs.id === mine.id) return true;
+      // the Storyteller sitting in your room unseen
+      return c.isHost && !!mine.god;
+    }
     if (theirs) return false;
     return !this.state.busy.includes(c.playerId);
   }
@@ -472,6 +530,11 @@ class VoiceChat {
   }
 
   _setTimer(leftMs) {
+    clearTimeout(this._bellTimer);
+    this._bellTimer = null;
+    if (leftMs > 5000) {
+      this._bellTimer = setTimeout(() => playSound("bell"), leftMs - 5000);
+    }
     this.state.timerActive = leftMs > 0;
     this.state.timerEnd = leftMs > 0 ? Date.now() + leftMs : 0;
     if (leftMs <= 0) {
@@ -492,6 +555,12 @@ class VoiceChat {
     this._send({ type: "chat-request", kind: "join", chatId });
   }
 
+  // Gives up on a chat request you made (e.g. while on hold)
+  cancelRequest(id) {
+    this._send({ type: "chat-cancel", id });
+    if (this.state.notice && this.state.notice.id === id) this._setNotice(null);
+  }
+
   respond(id, answer) {
     this._send({ type: "chat-respond", id, answer });
     this.state.incoming = this.state.incoming.filter(r => r.id !== id);
@@ -506,7 +575,8 @@ class VoiceChat {
   _setNotice(notice) {
     clearTimeout(this._noticeTimer);
     this.state.notice = notice;
-    if (notice) {
+    // "on hold" stays up until you cancel or it changes
+    if (notice && notice.status !== "hold") {
       this._noticeTimer = setTimeout(() => (this.state.notice = null), 7000);
     }
   }
@@ -555,7 +625,14 @@ class VoiceChat {
     } else if (msg.type === "welcome") {
       this.state.joined = true;
       this.state.phase = msg.phase || "day";
+      this._serverPhase = this.state.phase;
       this.state.chats = msg.chats || [];
+      const mine = this.chatOf(this._playerId);
+      this._prevChat = mine ? { id: mine.id, members: [...mine.members] } : null;
+      const hidden = !!(mine && (mine.hidden || []).includes(this._playerId));
+      this._roomKey = mine ? `${mine.id}:${hidden}` : "";
+      this._roomSelfMuted = hidden;
+      this.state.invisible = hidden;
       this.state.busy = msg.busy || [];
       this.state.mutedPlayers = msg.mutedPlayers || [];
       this._applyLocked();
@@ -583,9 +660,13 @@ class VoiceChat {
     } else if (msg.type === "mute-all") {
       this._applyAllMuted(msg.on);
     } else if (msg.type === "peer-mic") {
-      this._patch(msg.id, { micOn: !!msg.on });
+      this._patch(msg.id, { micOn: !!msg.on, roomMicOn: msg.room !== false });
       this._refreshMuted();
     } else if (msg.type === "phase") {
+      if (msg.phase === "day" && this._serverPhase && this._serverPhase !== "day") {
+        playSound("bell");
+      }
+      this._serverPhase = msg.phase;
       this.state.phase = msg.phase;
       this._setTimer(0);
     } else if (msg.type === "timer") {
@@ -593,6 +674,9 @@ class VoiceChat {
     } else if (msg.type === "bluffs") {
       if (this.onBluffs) this.onBluffs(msg.roles || []);
       this.state.bluffsPulse++;
+    } else if (msg.type === "grimoire") {
+      if (this.onGrimoire) this.onGrimoire(msg.players || []);
+      this.state.grimoirePulse++;
     } else if (msg.type === "player-muted") {
       this._applyPlayerMuted(msg.playerId, !!msg.on);
     } else if (msg.type === "chats") {
@@ -600,14 +684,23 @@ class VoiceChat {
       this.state.busy = msg.busy || [];
       this._onChatsChanged();
     } else if (msg.type === "chat-request") {
-      this.state.incoming = [
-        ...this.state.incoming.filter(r => r.id !== msg.id),
-        { id: msg.id, kind: msg.kind, from: msg.from, chatId: msg.chatId, num: msg.num }
-      ];
+      const known = this.state.incoming.some(r => r.id === msg.id);
+      const req = { id: msg.id, kind: msg.kind, from: msg.from, chatId: msg.chatId, num: msg.num, hold: !!msg.hold };
+      // a request already showing just changes in place (on hold / off hold)
+      this.state.incoming = known
+        ? this.state.incoming.map(r => (r.id === msg.id ? req : r))
+        : [...this.state.incoming, req];
+      if (!known) playSound("call");
     } else if (msg.type === "chat-cancel") {
       this.state.incoming = this.state.incoming.filter(r => r.id !== msg.id);
     } else if (msg.type === "chat-status") {
-      this._setNotice({ id: msg.id, status: msg.status, who: msg.who, num: msg.num });
+      const n = this.state.notice;
+      if (msg.status === "closed") {
+        // the request is gone: clear "sent" / "on hold", keep "accepted" etc.
+        if (n && n.id === msg.id && (n.status === "sent" || n.status === "hold")) this._setNotice(null);
+      } else {
+        this._setNotice({ id: msg.id, status: msg.status, who: msg.who, num: msg.num });
+      }
     } else if (msg.type === "lower-hand") {
       if (msg.playerId && msg.playerId === this._playerId && this.state.handUp) {
         this.setHand(false);
@@ -697,6 +790,7 @@ class VoiceChat {
         playerId: info.playerId || "",
         isHost: !!info.isHost,
         micOn: info.micOn !== false,
+        roomMicOn: info.roomMicOn !== false,
         hand: !!info.hand,
         hear: true,
         talk: true,
@@ -750,15 +844,10 @@ class VoiceChat {
     }
   }
 
-  // Turn RNNoise noise suppression on or off. Remembered in this browser.
+  // Turn RNNoise noise suppression on or off (always on from the UI).
   setRnnoise(on) {
     on = !!on;
     this.state.rnnoise = on;
-    try {
-      localStorage.setItem(RNNOISE_KEY, on ? "on" : "off");
-    } catch (e) {
-      // storage unavailable, the choice just won't be remembered
-    }
     if (!this._ctx) return;
     if (this._pipeline) this._applyDenoiseMode();
     else if (on && this.state.rnnoiseStatus !== "loading") {
@@ -867,11 +956,6 @@ class VoiceChat {
   setBrowserNs(on) {
     on = !!on;
     this.state.browserNs = on;
-    try {
-      localStorage.setItem(BROWSER_NS_KEY, on ? "on" : "off");
-    } catch (e) {
-      // storage unavailable, the choice just won't be remembered
-    }
     this._applyBrowserNs();
   }
 
@@ -1024,6 +1108,11 @@ class VoiceChat {
 
   _teardown(error) {
     this._gen++;
+    clearTimeout(this._bellTimer);
+    this._bellTimer = null;
+    this._prevChat = null;
+    this._serverPhase = "";
+    this._selfMuted = false;
     clearInterval(this._tickTimer);
     clearInterval(this._statsTimer);
     clearInterval(this._levelTimer);
@@ -1069,8 +1158,12 @@ class VoiceChat {
     this.state.mutedPlayers = [];
     this.state.lockedMute = false;
     this.state.invisible = false;
-    this._invisible = false;
-    this._wasWhisper = false;
+    this._roomSelfMuted = false;
+    this._roomKey = "";
+    this._micKey = "";
+    this.state.roomMicOn = true;
+    this.state.roomMutedIds = [];
+    this.state.micLocked = false;
     this.state.incoming = [];
     this.state.notice = null;
     this._handKey = "";

@@ -386,17 +386,6 @@ export default {
         .player.has-mic > .menu {
           margin-right: 52px;
         }
-        // show ability tooltip on the left
-        .ability {
-          right: 120%;
-          left: auto;
-          &:before {
-            border-right-color: transparent;
-            border-left-color: black;
-            right: auto;
-            left: 100%;
-          }
-        }
         .pronouns {
           left: 110%;
           right: auto;
@@ -410,6 +399,17 @@ export default {
       } @else {
         // second half of players
         z-index: $i - 1;
+        // show ability tooltip on the left (away from the menu side)
+        .ability {
+          right: 120%;
+          left: auto;
+          &:before {
+            border-right-color: transparent;
+            border-left-color: black;
+            right: auto;
+            left: 100%;
+          }
+        }
       }
 
       > * {

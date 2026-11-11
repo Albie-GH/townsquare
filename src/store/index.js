@@ -100,7 +100,7 @@ export default new Vuex.Store({
     grimoire: {
       isNight: false,
       isNightOrder: true,
-      isPublic: true,
+      isPublic: false, // grimoire shown by default
       isMenuOpen: false,
       isStatic: false,
       isMuted: false,
@@ -113,6 +113,7 @@ export default new Vuex.Store({
       fabled: false,
       gameState: false,
       nightOrder: false,
+      notepad: false,
       reference: false,
       reminder: false,
       role: false,

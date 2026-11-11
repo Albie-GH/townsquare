@@ -1,10 +1,26 @@
 <template>
   <div class="chat-prompts" v-if="voice.joined">
-    <div class="prompt notice" v-if="noticeText">{{ noticeText }}</div>
+    <!-- your request is waiting because they are in a chat -->
+    <div class="prompt" v-if="onHold">
+      <div class="text">You are on hold</div>
+      <div class="buttons">
+        <div class="button demon" @click="cancelHold">Cancel</div>
+      </div>
+    </div>
+    <div class="prompt notice" v-else-if="noticeText">{{ noticeText }}</div>
     <div class="prompt" v-for="req in voice.incoming" :key="req.id">
       <div class="text">{{ text(req) }}</div>
       <div class="buttons">
-        <div class="button townsfolk" @click="answer(req, 'accept')">Accept</div>
+        <div
+          class="button townsfolk"
+          v-if="req.hold && canAdd(req)"
+          @click="answer(req, 'accept')"
+        >
+          Add to room
+        </div>
+        <div class="button townsfolk" v-else-if="!req.hold" @click="answer(req, 'accept')">
+          Accept
+        </div>
         <div class="button demon" @click="answer(req, 'decline')">Decline</div>
         <div class="button" v-if="req.kind === 'join'" @click="answer(req, 'wait')">
           Wait
@@ -34,6 +50,9 @@ export default {
         .map(id => this.nameOf(id));
       return `Private chat with ${names.join(", ")}`;
     },
+    onHold() {
+      return !!this.voice.notice && this.voice.notice.status === "hold";
+    },
     noticeText() {
       const n = this.voice.notice;
       if (!n) return "";
@@ -57,8 +76,20 @@ export default {
     }
   },
   methods: {
+    // on hold you can pull them into your chat, unless it is a private
+    // Storyteller chat (only the Storyteller adds people to those)
+    canAdd(req) {
+      if (req.kind === "st") return true;
+      return !!this.myChat && !this.myChat.whisper;
+    },
+    cancelHold() {
+      voice.cancelRequest(this.voice.notice.id);
+    },
     text(req) {
       const who = this.nameOf(req.from);
+      if (req.hold && !this.canAdd(req)) {
+        return `${who} is waiting to chat with you when you're free`;
+      }
       if (req.kind === "invite") return `${who} invited you to Room ${req.num}`;
       if (req.kind === "join") return `${who} wants to join Room ${req.num}`;
       if (req.kind === "st") return `${who} wants a private chat with you`;

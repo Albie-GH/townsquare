@@ -1,4 +1,5 @@
 import voice from "../voice";
+import { playSound } from "../sounds";
 
 class LiveSession {
   constructor(store) {
@@ -506,6 +507,10 @@ class LiveSession {
         });
       }
     } else {
+      // someone just died: everyone hears it
+      if (property === "isDead" && value === true && !player.isDead) {
+        playSound("death");
+      }
       // just update the player otherwise
       this._store.commit("players/update", { player, property, value });
     }
@@ -883,6 +888,28 @@ export default store => {
     }
   };
 
+  // The Storyteller sent you the Grimoire (the Spy): copy over every seat's
+  // character and reminder tokens
+  voice.onGrimoire = seats => {
+    const players = store.state.players.players;
+    seats.forEach((seat, index) => {
+      const player = players[index];
+      if (!player || !seat) return;
+      const sent = seat.role;
+      const role = sent
+        ? store.state.roles.get(sent.id) ||
+          store.getters.rolesJSONbyId.get(sent.id) ||
+          (sent.isCustom ? sent : {})
+        : {};
+      store.commit("players/update", { player, property: "role", value: role });
+      store.commit("players/update", {
+        player,
+        property: "reminders",
+        value: seat.reminders || []
+      });
+    });
+  };
+
   // Voice starts automatically with the live session
   const joinVoice = ({ session: { sessionId, isSpectator, playerId } }) => {
     voice.join(
@@ -973,6 +1000,14 @@ export default store => {
         session.sendGamestate("", true);
         break;
       case "players/update":
+        // the Storyteller marked someone dead
+        if (
+          !state.session.isSpectator &&
+          payload.property === "isDead" &&
+          payload.value === true
+        ) {
+          playSound("death");
+        }
         if (payload.property === "pronouns") {
           session.sendPlayerPronouns(payload);
         } else {

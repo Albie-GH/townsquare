@@ -150,7 +150,7 @@
             </li>
             <template v-else>
               <li @click="voiceToggleMic">
-                Mic
+                Mic [M]
                 <em>
                   <span class="meter"
                     ><span :style="{ width: voice.level + '%' }"></span
@@ -158,7 +158,7 @@
                   {{
                     voice.micOn
                       ? "On"
-                      : (voice.allMuted && !voice.isHost) || voice.lockedMute
+                      : voice.micLocked
                       ? "Muted by ST"
                       : "Muted"
                   }}
@@ -171,28 +171,6 @@
                     :icon="['fas', voice.allMuted ? 'check-square' : 'square']"
                   />
                 </em>
-              </li>
-              <li @click="toggleNoiseSuppression">
-                Noise suppression
-                <em>
-                  {{
-                    !voice.rnnoise
-                      ? "Off"
-                      : voice.rnnoiseStatus === "loading"
-                      ? "Loading"
-                      : voice.rnnoiseStatus === "waiting"
-                      ? "Waiting for click"
-                      : voice.rnnoiseStatus === "error"
-                      ? "Failed"
-                      : voice.rnnoiseStatus === "unsupported"
-                      ? "Unsupported"
-                      : "On"
-                  }}
-                </em>
-              </li>
-              <li @click="toggleBrowserNoise">
-                Browser filter
-                <em>{{ voice.browserNs ? "On" : "Off" }}</em>
               </li>
               <li class="gate">
                 Noise gate
@@ -422,12 +400,6 @@ export default {
     },
     voiceToggleMic() {
       voice.toggleMic();
-    },
-    toggleNoiseSuppression() {
-      voice.setRnnoise(!voice.state.rnnoise);
-    },
-    toggleBrowserNoise() {
-      voice.setBrowserNs(!voice.state.browserNs);
     },
     setGate(event) {
       voice.setGate(parseInt(event.target.value, 10));

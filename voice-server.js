@@ -50,12 +50,14 @@ function chatsFor(game, member) {
   for (const c of game.chats) {
     if (c.whisper) {
       if (c.members.includes(member.playerId)) {
-        out.push({ id: c.id, num: 0, whisper: true, members: c.members, hidden: [], locked: c.forced.includes(member.playerId) });
+        out.push({ id: c.id, num: 0, whisper: true, members: c.members, hidden: [], locked: c.forced.includes(member.playerId), muted: c.muted || [] });
       }
     } else if (member.isHost) {
-      out.push({ id: c.id, num: c.num, whisper: false, members: c.members, hidden: c.hidden });
+      out.push({ id: c.id, num: c.num, whisper: false, members: c.members, hidden: c.hidden, muted: c.muted || [] });
     } else {
-      out.push({ id: c.id, num: c.num, whisper: false, members: c.members.filter(m => !c.hidden.includes(m)), hidden: [] });
+      // god: the Storyteller is in this room unseen, so its members can hear them
+      const god = c.hidden.length > 0 && c.members.includes(member.playerId);
+      out.push({ id: c.id, num: c.num, whisper: false, members: c.members.filter(m => !c.hidden.includes(m)), hidden: [], muted: (c.muted || []).filter(m => !c.hidden.includes(m)), god });
     }
   }
   return out;
@@ -66,19 +68,60 @@ function busyIds(game) {
   for (const c of game.chats) if (c.whisper) for (const m of c.members) if (!ids.includes(m)) ids.push(m);
   return ids;
 }
+// Requests for a chat with one person ("new", or "st" for the Storyteller) wait "on hold"
+// while that person is in a chat, instead of being dropped
+function holdable(req) {
+  return req.type === "new" || req.type === "st";
+}
+function armExpiry(room, game, req) {
+  clearTimeout(req.timer);
+  req.timer = setTimeout(() => {
+    if (!game.reqs.has(req.id)) return;
+    dropRequest(room, game, req);
+    sendTo(room, req.from, { type: "chat-status", id: req.id, status: "expired", who: req.to });
+  }, REQUEST_TTL_MS);
+}
+function requestPrompt(game, req) {
+  const chat = game.chats.find(c => c.id === req.chatId);
+  return { type: "chat-request", id: req.id, kind: req.type, from: req.from, chatId: req.chatId, num: chat ? chat.num : 0, hold: !!req.hold };
+}
+// Puts requests on hold (no expiry) or takes them off hold (fresh expiry), and tells both sides
+function refreshHolds(room, game) {
+  for (const req of game.reqs.values()) {
+    if (!holdable(req)) continue;
+    const hold = !!chatOf(game, req.to);
+    if (hold === !!req.hold) continue;
+    req.hold = hold;
+    if (hold) clearTimeout(req.timer);
+    else armExpiry(room, game, req);
+    sendTo(room, req.from, { type: "chat-status", id: req.id, status: hold ? "hold" : "sent", who: req.to, num: 0 });
+    sendTo(room, req.to, requestPrompt(game, req));
+  }
+}
+// busy for one person: whisper members, plus an unseen Storyteller sitting in a room you're not in
+function busyFor(game, member) {
+  const ids = busyIds(game);
+  for (const c of game.chats) {
+    if (c.members.includes(member.playerId)) continue;
+    for (const h of c.hidden) if (!ids.includes(h)) ids.push(h);
+  }
+  return ids;
+}
 function broadcastChats(room) {
   const game = getGame(room);
   const members = rooms.get(room);
   if (!members) return;
-  const busy = busyIds(game);
+  refreshHolds(room, game);
   for (const p of members.values()) {
-    p.ws.send(JSON.stringify({ type: "chats", chats: chatsFor(game, p), busy }));
+    p.ws.send(JSON.stringify({ type: "chats", chats: chatsFor(game, p), busy: busyFor(game, p) }));
   }
 }
 function dropRequest(room, game, req, notifyCancel = true) {
   clearTimeout(req.timer);
   game.reqs.delete(req.id);
   if (!notifyCancel) return;
+  // lets the requester clear a "sent" or "on hold" notice
+  sendTo(room, req.from, { type: "chat-status", id: req.id, status: "closed", who: req.to, num: 0 });
   if (req.type === "join") {
     const chat = game.chats.find(c => c.id === req.chatId);
     if (chat) for (const m of chat.members) sendTo(room, m, { type: "chat-cancel", id: req.id });
@@ -87,9 +130,12 @@ function dropRequest(room, game, req, notifyCancel = true) {
   }
 }
 // forget every pending request that involves one of these players
-function dropRequestsFor(room, game, playerIds) {
+// (keepHeld: requests to them for a one-on-one chat go on hold instead)
+function dropRequestsFor(room, game, playerIds, keepHeld = false) {
   for (const req of [...game.reqs.values()]) {
-    if (playerIds.includes(req.from) || (req.to && playerIds.includes(req.to))) {
+    if (playerIds.includes(req.from)) {
+      dropRequest(room, game, req);
+    } else if (req.to && playerIds.includes(req.to) && !(keepHeld && holdable(req))) {
       dropRequest(room, game, req);
     }
   }
@@ -120,6 +166,7 @@ function leaveChat(room, game, playerId) {
   if (!chat) return;
   chat.members = chat.members.filter(m => m !== playerId);
   chat.hidden = chat.hidden.filter(m => m !== playerId);
+  if (chat.muted) chat.muted = chat.muted.filter(m => m !== playerId);
   if (chat.forced) chat.forced = chat.forced.filter(m => m !== playerId);
   // a private chat needs at least two people who are not hidden
   if (chat.members.filter(m => !chat.hidden.includes(m)).length < 2) {
@@ -169,8 +216,8 @@ wss.on("connection", ws => {
       room = roomName;
       id = crypto.randomBytes(8).toString("hex");
       const isHost = !!msg.isHost;
-      const peers = [...members].map(([pid, p]) => ({ id: pid, name: p.name, playerId: p.playerId, isHost: p.isHost, micOn: p.micOn !== false, hand: !!p.hand }));
-      members.set(id, { ws, name, playerId, isHost, micOn: true, hand: false });
+      const peers = [...members].map(([pid, p]) => ({ id: pid, name: p.name, playerId: p.playerId, isHost: p.isHost, micOn: p.micOn !== false, roomMicOn: p.roomMicOn !== false, hand: !!p.hand }));
+      members.set(id, { ws, name, playerId, isHost, micOn: true, roomMicOn: true, hand: false });
       rooms.set(room, members);
       const game = getGame(room);
       ws.send(JSON.stringify({
@@ -181,7 +228,7 @@ wss.on("connection", ws => {
         phase: game.phase,
         timerLeft: timerLeft(game),
         chats: chatsFor(game, members.get(id)),
-        busy: busyIds(game),
+        busy: busyFor(game, members.get(id)),
         mutedPlayers: [...game.muted]
       }));
       for (const [pid, p] of members) {
@@ -205,9 +252,11 @@ wss.on("connection", ws => {
       const members = rooms.get(room);
       const me = members && members.get(id);
       if (me) {
+        // micOn: Town Square mute, roomMicOn: private chat mute (kept separately)
         me.micOn = !!msg.on;
+        me.roomMicOn = msg.room !== false;
         for (const [pid, p] of members) {
-          if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-mic", id, on: me.micOn }));
+          if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-mic", id, on: me.micOn, room: me.roomMicOn }));
         }
       }
     }
@@ -275,7 +324,9 @@ wss.on("connection", ws => {
       } else if (msg.kind === "new" || msg.kind === "invite") {
         const to = String(msg.to || "").slice(0, 40);
         const target = [...members.values()].find(p => p.playerId === to);
-        if (!target || target.isHost || to === from || chatOf(game, to)) return;
+        if (!target || target.isHost || to === from) return;
+        // a chat request to someone already chatting goes on hold; an invite needs them free
+        if (msg.kind === "invite" && chatOf(game, to)) return;
         if (msg.kind === "new" && myChat) return;
         // only the Storyteller adds people to a private Storyteller chat
         if (msg.kind === "invite" && (!myChat || myChat.whisper || myChat.members.length >= MAX_CHAT_MEMBERS)) return;
@@ -292,20 +343,27 @@ wss.on("connection", ws => {
         if (old.from === from) dropRequest(room, game, old);
       }
       req.id = ++game.seq;
-      req.timer = setTimeout(() => {
-        if (!game.reqs.has(req.id)) return;
-        dropRequest(room, game, req);
-        sendTo(room, from, { type: "chat-status", id: req.id, status: "expired", who: req.to });
-      }, REQUEST_TTL_MS);
+      req.hold = holdable(req) && !!chatOf(game, req.to);
+      // requests on hold wait until the requester cancels or the other person is free
+      if (!req.hold) armExpiry(room, game, req);
       game.reqs.set(req.id, req);
       const chat = game.chats.find(c => c.id === req.chatId);
-      const prompt = { type: "chat-request", id: req.id, kind: req.type, from, chatId: req.chatId, num: chat ? chat.num : 0 };
+      const prompt = requestPrompt(game, req);
       if (req.type === "join") {
         for (const m of chat.members) sendTo(room, m, prompt);
       } else {
         sendTo(room, req.to, prompt);
       }
-      sendTo(room, from, { type: "chat-status", id: req.id, status: "sent", who: req.to, num: chat ? chat.num : 0 });
+      sendTo(room, from, { type: "chat-status", id: req.id, status: req.hold ? "hold" : "sent", who: req.to, num: chat ? chat.num : 0 });
+    }
+
+    if (msg.type === "chat-cancel" && room) {
+      // the requester gives up on a request (e.g. while on hold)
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      const game = getGame(room);
+      const req = game.reqs.get(Number(msg.id));
+      if (me && req && req.from === me.playerId) dropRequest(room, game, req);
     }
 
     if (msg.type === "chat-respond" && room) {
@@ -330,26 +388,27 @@ wss.on("connection", ws => {
       if (answer !== "accept") return;
       if (req.type !== "st" && !chatActive(game)) return;
       let joined = [];
-      if (req.type === "st") {
-        let wc = chatOf(game, req.to);
-        if ((wc && !wc.whisper) || chatOf(game, req.from)) {
-          dropRequest(room, game, req);
-          sendTo(room, req.from, { type: "chat-status", id: req.id, status: "declined", who: req.to, num: 0 });
-          return;
-        }
-        if (!wc) {
-          wc = { id: ++game.seq, num: 0, members: [req.to], hidden: [], whisper: true, forced: [] };
-          game.chats.push(wc);
-        }
-        wc.members.push(req.from);
-        joined = [req.from, req.to];
-      } else if (req.type === "new") {
-        if (chatOf(game, req.from) || chatOf(game, req.to)) {
+      if (holdable(req)) {
+        if (chatOf(game, req.from)) {
           dropRequest(room, game, req);
           return;
         }
-        game.chats.push({ id: ++game.seq, num: lowestFreeNum(game), members: [req.from, req.to], hidden: [], whisper: false });
-        joined = [req.from, req.to];
+        const current = chatOf(game, req.to);
+        if (current) {
+          // on hold: "Add to room" brings the requester into the chat the other person is in.
+          // Only the Storyteller can add people to a private Storyteller chat.
+          if (current.whisper && req.type !== "st") return;
+          if (!current.whisper && !chatActive(game)) return;
+          if (current.members.length >= MAX_CHAT_MEMBERS) return;
+          current.members.push(req.from);
+          joined = [req.from];
+        } else if (req.type === "st") {
+          game.chats.push({ id: ++game.seq, num: 0, members: [req.to, req.from], hidden: [], whisper: true, forced: [] });
+          joined = [req.from, req.to];
+        } else {
+          game.chats.push({ id: ++game.seq, num: lowestFreeNum(game), members: [req.from, req.to], hidden: [], whisper: false });
+          joined = [req.from, req.to];
+        }
       } else {
         const target = req.type === "invite" ? req.to : req.from;
         if (!chat || chatOf(game, target) || chat.members.length >= MAX_CHAT_MEMBERS) {
@@ -361,7 +420,7 @@ wss.on("connection", ws => {
       }
       sendTo(room, req.from, { type: "chat-status", id: req.id, status: "accepted", who: me.playerId, num: (game.chats.find(c => c.members.includes(req.from)) || {}).num || 0 });
       dropRequest(room, game, req);
-      dropRequestsFor(room, game, joined);
+      dropRequestsFor(room, game, joined, true);
       broadcastChats(room);
     }
 
@@ -372,6 +431,23 @@ wss.on("connection", ws => {
       if (me && me.isHost && Array.isArray(msg.roles)) {
         const roles = msg.roles.slice(0, 3).map(r => (r && typeof r === "object" ? r : null));
         sendTo(room, String(msg.to || "").slice(0, 40), { type: "bluffs", roles });
+      }
+    }
+
+    if (msg.type === "send-grimoire" && room) {
+      // Storyteller: show one player (the Spy) every seat's character and reminder tokens
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (me && me.isHost && Array.isArray(msg.players)) {
+        const players = msg.players.slice(0, 40).map(p => {
+          if (!p || typeof p !== "object") return null;
+          const role = p.role && typeof p.role === "object" ? p.role : null;
+          const reminders = Array.isArray(p.reminders)
+            ? p.reminders.slice(0, 30).filter(r => r && typeof r === "object")
+            : [];
+          return { role, reminders };
+        });
+        sendTo(room, String(msg.to || "").slice(0, 40), { type: "grimoire", players });
       }
     }
 
@@ -389,6 +465,39 @@ wss.on("connection", ws => {
       }
     }
 
+    if (msg.type === "room-mute" && room) {
+      // Storyteller: mute or unmute someone inside their private chat (separate from the Town Square)
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (!me || !me.isHost) return;
+      const game = getGame(room);
+      const playerId = String(msg.playerId || "").slice(0, 40);
+      const chat = chatOf(game, playerId);
+      if (!chat) return;
+      const list = (chat.muted || []).filter(m => m !== playerId);
+      if (msg.on) list.push(playerId);
+      chat.muted = list;
+      broadcastChats(room);
+    }
+
+    if (msg.type === "chat-visibility" && room) {
+      // Storyteller: show yourself in the room you're in, or go unseen again
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (!me || !me.isHost || !me.playerId) return;
+      const game = getGame(room);
+      const chat = chatOf(game, me.playerId);
+      if (!chat || chat.whisper) return;
+      chat.hidden = chat.hidden.filter(m => m !== me.playerId);
+      if (msg.hidden) {
+        // a room needs two people who can see each other
+        if (chat.members.filter(m => m !== me.playerId).length < 2) return broadcastChats(room);
+        chat.hidden.push(me.playerId);
+        if (chat.muted) chat.muted = chat.muted.filter(m => m !== me.playerId);
+      }
+      broadcastChats(room);
+    }
+
     if (msg.type === "chat-join" && room) {
       // Storyteller: join a room, optionally hidden from the players
       const members = rooms.get(room);
@@ -402,7 +511,7 @@ wss.on("connection", ws => {
       if (!target) return;
       target.members.push(me.playerId);
       if (msg.hidden) target.hidden.push(me.playerId);
-      dropRequestsFor(room, game, [me.playerId]);
+      dropRequestsFor(room, game, [me.playerId], true);
       broadcastChats(room);
     }
 
@@ -429,7 +538,7 @@ wss.on("connection", ws => {
       // a chat the Storyteller opens cannot be left by the player
       if (!chat.members.includes(to)) chat.members.push(to);
       if (!chat.forced.includes(to)) chat.forced.push(to);
-      dropRequestsFor(room, game, [to]);
+      dropRequestsFor(room, game, [to], true);
       broadcastChats(room);
     }
 

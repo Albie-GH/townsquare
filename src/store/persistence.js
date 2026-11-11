@@ -20,10 +20,12 @@ module.exports = store => {
   if (localStorage.getItem("zoom")) {
     store.commit("setZoom", parseFloat(localStorage.getItem("zoom")));
   }
-  if (localStorage.getItem("isGrimoire")) {
-    store.commit("toggleGrimoire", false);
-    updatePagetitle(false);
+  // the grimoire is shown by default; only a choice to hide it is remembered
+  localStorage.removeItem("isGrimoire"); // old setting, from when hidden was the default
+  if (localStorage.getItem("grimoireHidden")) {
+    store.commit("toggleGrimoire", true);
   }
+  updatePagetitle(store.state.grimoire.isPublic);
   if (localStorage.roles !== undefined) {
     store.commit("setCustomRoles", JSON.parse(localStorage.roles));
     store.commit("setEdition", { id: "custom" });
@@ -73,10 +75,10 @@ module.exports = store => {
   store.subscribe(({ type, payload }, state) => {
     switch (type) {
       case "toggleGrimoire":
-        if (!state.grimoire.isPublic) {
-          localStorage.setItem("isGrimoire", 1);
+        if (state.grimoire.isPublic) {
+          localStorage.setItem("grimoireHidden", 1);
         } else {
-          localStorage.removeItem("isGrimoire");
+          localStorage.removeItem("grimoireHidden");
         }
         updatePagetitle(state.grimoire.isPublic);
         break;

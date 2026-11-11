@@ -19,6 +19,7 @@ const faIcons = [
   "Moon",
   "Sun",
   "SignOutAlt",
+  "StickyNote",
   "Comments",
   "Cog",
   "Copy",
