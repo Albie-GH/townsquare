@@ -16,6 +16,7 @@
           'has-mic': showMic,
           'out-of-room': outOfRoom,
           revealed: !!player.revealed,
+          'needs-role': needsRole,
           'revealed-drunk': player.revealed === 'drunk'
         },
         player.role.team
@@ -370,6 +371,15 @@ export default {
         !!this.player.id &&
         !!this.theirChat &&
         this.theirChat.id === this.myPrivateRoom.id
+      );
+    },
+    // someone has taken this seat but has no character yet: Storytellers see it
+    // on every seat, a player sees it on their own
+    needsRole: function() {
+      return (
+        (!this.session.isSpectator || this.isYou) &&
+        !!this.player.id &&
+        !(this.player.role && this.player.role.id)
       );
     },
     canWhisper: function() {
@@ -1092,6 +1102,12 @@ li.move:not(.from) .player .overlay svg.move {
   .player.you.#{$name} .token {
     animation: #{$name}-glow 5s ease-in-out infinite;
   }
+
+  // "Disable Animations": a steady glow in the same colour instead of the pulse
+  #app.static .player.you.#{$name} .token {
+    border-color: $color;
+    box-shadow: 0 0 10px 4px rgba($color, 0.8);
+  }
 }
 
 @include glow("townsfolk", $townsfolk);
@@ -1102,6 +1118,13 @@ li.move:not(.from) .player .overlay svg.move {
 
 .player.you .token {
   animation: townsfolk-glow 5s ease-in-out infinite;
+}
+
+// no character yet: the steady glow is townsfolk blue, like the pulse
+#app.static .player.you:not(.townsfolk):not(.outsider):not(.demon):not(.minion):not(.traveler)
+  .token {
+  border-color: $townsfolk;
+  box-shadow: 0 0 10px 4px rgba($townsfolk, 0.8);
 }
 
 /****** Marked icon ******/
@@ -1247,6 +1270,13 @@ li.move:not(.from) .player .overlay svg.move {
 @include own-plate("demon", $demon);
 @include own-plate("minion", $minion);
 @include own-plate("traveler", $traveler);
+
+/***** A seated player still waiting for a character: the same blue as the
+       glow around your own portrait before you have a character *****/
+.player.needs-role > .name {
+  border-color: $townsfolk;
+  box-shadow: 0 0 8px 2px $townsfolk;
+}
 
 .player.dead > .name {
   opacity: 0.5;

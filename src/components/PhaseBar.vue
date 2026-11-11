@@ -40,6 +40,12 @@
         >
           <font-awesome-icon icon="clock" />Start chat timer
         </li>
+        <template v-if="music.playing">
+          <li class="headline">Music</li>
+          <li @click="stopMusic">
+            <font-awesome-icon icon="volume-mute" />Stop wake-up music
+          </li>
+        </template>
       </ul>
     </transition>
   </div>
@@ -48,11 +54,13 @@
 <script>
 import { mapState } from "vuex";
 import voice from "../voice";
+import { music } from "../sounds";
 
 export default {
   data() {
     return {
       voice: voice.state,
+      music,
       now: Date.now(),
       timer: null,
       isMenuOpen: false,
@@ -118,6 +126,11 @@ export default {
         this.$store.commit("toggleNight", night);
         if (night) this.$store.commit("session/setMarkedPlayer", -1);
       }
+    },
+    // stops the wake-up music for everyone
+    stopMusic() {
+      this.isMenuOpen = false;
+      voice.stopMusicAll();
     },
     startTimer() {
       if (this.voice.phase !== "day" || !this.voice.joined) return;

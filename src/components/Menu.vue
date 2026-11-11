@@ -111,6 +111,20 @@
                 :icon="['fas', grimoire.isMuted ? 'volume-mute' : 'volume-up']"
             /></em>
           </li>
+          <!-- how loud the sound effects, music and vote countdown are for you -->
+          <li class="gate sfx">
+            SFX Volume
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              :value="sfx.volume"
+              @input="setSfx"
+              title="Sound effects and music volume"
+            />
+            <em>{{ sfx.volume }}%</em>
+          </li>
         </template>
 
         <template v-if="tab === 'session'">
@@ -173,7 +187,7 @@
                 </em>
               </li>
               <li class="gate">
-                Noise gate
+                Noise Gate
                 <input
                   type="range"
                   min="0"
@@ -294,6 +308,7 @@
 <script>
 import { mapMutations, mapState } from "vuex";
 import voice from "../voice";
+import { sfx, setSfxVolume } from "../sounds";
 
 export default {
   computed: {
@@ -303,10 +318,14 @@ export default {
   data() {
     return {
       tab: "grimoire",
+      sfx,
       voice: voice.state
     };
   },
   methods: {
+    setSfx(event) {
+      setSfxVolume(parseInt(event.target.value, 10));
+    },
     setBackground() {
       const background = prompt("Enter custom background URL");
       if (background || background === "") {
@@ -514,8 +533,8 @@ export default {
 }
 
 .menu {
-  width: 220px;
-  transform-origin: 200px 22px;
+  width: 330px;
+  transform-origin: 310px 22px;
   transition: transform 500ms cubic-bezier(0.68, -0.55, 0.27, 1.55);
   transform: rotate(-90deg);
   position: absolute;
@@ -648,10 +667,19 @@ export default {
   color: #3ddc84;
 }
 
+// sliders fill the space between the label and the value
 li.gate input {
-  width: 70px;
-  margin: 0 4px;
+  flex-grow: 1;
+  width: auto;
+  min-width: 0;
+  margin: 0 10px;
   cursor: pointer;
+}
+// a fixed width for the value, so the slider doesn't move as the number changes
+li.gate em {
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .voice-error {

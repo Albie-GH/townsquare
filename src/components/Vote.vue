@@ -108,7 +108,7 @@
           :autoplay="!grimoire.isMuted"
           src="../assets/sounds/countdown.mp3"
           :muted="grimoire.isMuted"
-          :volume.prop="0.5"
+          :volume.prop="0.5 * sfxGain(sfx.volume)"
         ></audio>
       </div>
     </transition>
@@ -117,6 +117,7 @@
 
 <script>
 import { mapGetters, mapState } from "vuex";
+import { sfx, sfxGain } from "../sounds";
 
 export default {
   computed: {
@@ -184,10 +185,13 @@ export default {
   },
   data() {
     return {
-      voteTimer: null
+      voteTimer: null,
+      sfx
     };
   },
   methods: {
+    // the SFX slider (reads sfx.volume, so the countdown follows it)
+    sfxGain,
     countdown() {
       this.$store.commit("session/lockVote", 0);
       this.$store.commit("session/setVoteInProgress", true);

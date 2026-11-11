@@ -1143,6 +1143,8 @@ export default store => {
   // the constructor reconnects to a stored session without a mutation
   if (store.state.session.sessionId) joinVoice(store.state);
 
+  let nightMuteTimer = null; // mutes everyone a few seconds after night falls
+
   // listen to mutations
   store.subscribe(({ type, payload }, state) => {
     if (!sync.applying && canSync()) {
@@ -1203,9 +1205,17 @@ export default store => {
         break;
       case "toggleNight":
         session.setIsNight();
-        // night falls: mute every player; day breaks: unmute everyone
+        // night falls: the bell rings, and 5 seconds later everyone is muted
+        // (time to say goodnight); day breaks: unmute everyone straight away
         if (!state.session.isSpectator && !sync.applying) {
-          voice.setAllMuted(!!state.grimoire.isNight);
+          clearTimeout(nightMuteTimer);
+          if (state.grimoire.isNight) {
+            nightMuteTimer = setTimeout(() => {
+              if (store.state.grimoire.isNight) voice.setAllMuted(true);
+            }, 5000);
+          } else {
+            voice.setAllMuted(false);
+          }
           // keep the shared phase in step (dusk is only left by going to night)
           if (state.grimoire.isNight) voice.setPhase("night");
           else if (voice.state.phase === "night") voice.setPhase("day");

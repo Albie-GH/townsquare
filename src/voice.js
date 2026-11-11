@@ -1,5 +1,5 @@
 import Vue from "vue";
-import { playSound } from "./sounds";
+import { playSound, startMusic, stopMusic } from "./sounds";
 
 const ICE = {
   iceServers: [
@@ -71,6 +71,7 @@ class VoiceChat {
       lineMuted: [], // Storytellers muted on the always-open line between the two Storytellers
       lineAutoIds: [], // Storytellers whose line is off for now: the other one already hears them
       urgent: false, // Urgent Line: both Storytellers muted everywhere, only on their line
+      stDead: false, // the Storytellers have been marked dead (both of them together)
       allMuted: false, // the Storyteller has muted everyone (players can't unmute)
       mutedIds: [], // playerIds currently muted (self-muted or muted by the Storyteller)
       handIds: [], // playerIds with a raised hand, including your own
@@ -629,6 +630,19 @@ class VoiceChat {
     return inChat ? peer.roomMicOn !== false : peer.micOn !== false;
   }
 
+  // Storytellers: mark both Storytellers dead, or alive again
+  setStDead(on) {
+    if (!this.state.isHost) return;
+    this._send({ type: "st-dead", on: !!on });
+  }
+
+  // Storytellers: stop the wake-up music for everyone
+  stopMusicAll() {
+    if (!this.state.isHost) return;
+    stopMusic();
+    this._send({ type: "music-stop" });
+  }
+
   _urgentSelf() {
     return this.state.urgent && this.state.isHost && !!this.state.cohostPlayerId;
   }
@@ -862,6 +876,7 @@ class VoiceChat {
       }
       this.state.lineMuted = msg.lineMuted || [];
       this.state.urgent = !!msg.urgent;
+      this.state.stDead = !!msg.stDead;
       this._setCohost(msg.cohost, true);
       // the newcomer starts the call with everyone already here
       for (const p of msg.peers) {
@@ -883,9 +898,13 @@ class VoiceChat {
       this._syncAudio(msg.id);
       this._refreshMuted();
     } else if (msg.type === "phase") {
-      if (msg.phase === "day" && this._serverPhase && this._serverPhase !== "day") {
-        playSound("bell");
-      }
+      // the bell rings for everyone when day breaks and when night falls;
+      // daybreak also starts the wake-up music, which stops when someone dies
+      const changed = !!this._serverPhase && this._serverPhase !== msg.phase;
+      const bell = msg.phase === "day" || msg.phase === "night";
+      if (bell && changed) playSound("bell");
+      if (changed && msg.phase === "day") startMusic();
+      else if (changed) stopMusic();
       this._serverPhase = msg.phase;
       this.state.phase = msg.phase;
       this._setTimer(0);
@@ -899,6 +918,12 @@ class VoiceChat {
       this.state.grimoirePulse++;
     } else if (msg.type === "cohost") {
       this._setCohost(msg);
+    } else if (msg.type === "st-dead") {
+      // the Storytellers died: everyone hears it (and the wake-up music stops)
+      if (msg.on && !this.state.stDead) playSound("death");
+      this.state.stDead = !!msg.on;
+    } else if (msg.type === "music-stop") {
+      stopMusic();
     } else if (msg.type === "st-urgent") {
       this.state.urgent = !!msg.on;
       this._applyMic();
@@ -1371,6 +1396,8 @@ class VoiceChat {
     this.state.lineMuted = [];
     this.state.lineAutoIds = [];
     this.state.urgent = false;
+    this.state.stDead = false;
+    stopMusic();
     this._trackOn = true;
     this._joinedAsHost = false;
     this.state.allMuted = false;

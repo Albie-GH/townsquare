@@ -20,7 +20,7 @@ function getGame(room) {
     // cohost: playerId of the co-Storyteller (kept if they reload)
     // lineMuted: Storytellers muted on the always-open line between the two Storytellers
     // urgent: both Storytellers muted everywhere, talking only over their line
-    games.set(room, { phase: "day", timerEnd: 0, timer: null, chats: [], reqs: new Map(), seq: 0, muted: new Set(), cohost: "", cohostName: "", lineMuted: new Set(), urgent: false });
+    games.set(room, { phase: "day", timerEnd: 0, timer: null, chats: [], reqs: new Map(), seq: 0, muted: new Set(), cohost: "", cohostName: "", lineMuted: new Set(), urgent: false, stDead: false });
   }
   return games.get(room);
 }
@@ -259,7 +259,8 @@ wss.on("connection", ws => {
         mutedPlayers: [...game.muted],
         cohost: { playerId: game.cohost, name: game.cohostName },
         lineMuted: [...game.lineMuted],
-        urgent: game.urgent
+        urgent: game.urgent,
+        stDead: game.stDead
       }));
       for (const [pid, p] of members) {
         if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-joined", id, name, playerId, isHost }));
@@ -633,6 +634,24 @@ wss.on("connection", ws => {
       const playerId = String(msg.playerId || "").slice(0, 40);
       if (!isSt(game, me) || !playerId || isStId(room, game, playerId)) return;
       leaveChat(room, game, playerId);
+    }
+
+    if (msg.type === "st-dead" && room) {
+      // a Storyteller marks the Storytellers dead (or alive again): both always go together
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      const game = getGame(room);
+      if (!isSt(game, me)) return;
+      game.stDead = !!msg.on;
+      broadcast(room, { type: "st-dead", on: game.stDead });
+    }
+
+    if (msg.type === "music-stop" && room) {
+      // a Storyteller stops the wake-up music for everyone
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      if (!isSt(getGame(room), me)) return;
+      broadcast(room, { type: "music-stop" });
     }
 
     if (msg.type === "st-urgent" && room) {

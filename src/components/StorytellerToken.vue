@@ -11,6 +11,13 @@
       <font-awesome-icon icon="theater-masks" />
       <div class="speaking-ring"></div>
     </div>
+    <!-- the dead marker: a Storyteller marks both Storytellers dead at once -->
+    <div
+      class="st-shroud"
+      :class="{ dead: voice.stDead, clickable: canKill }"
+      :title="canKill ? (voice.stDead ? 'Bring the Storytellers back to life' : 'Mark the Storytellers as dead') : ''"
+      @click.stop="toggleDead"
+    ></div>
     <!-- Storytellers only: the always-open line between the two Storytellers.
          Either Storyteller can mute themselves or the other one on it. -->
     <div
@@ -189,6 +196,9 @@ export default {
     lineMuted() {
       return !this.voice.urgent && this.voice.lineMuted.includes(this.hostId);
     },
+    canKill() {
+      return this.voice.joined && this.voice.isHost;
+    },
     showUrgent() {
       return (
         this.voice.joined &&
@@ -273,6 +283,14 @@ export default {
       const name = prompt("Your name as co-Storyteller", "");
       if (name === null) return;
       voice.requestCohost(name);
+    },
+    toggleDead() {
+      if (!this.canKill) return;
+      const who = this.voice.cohostPlayerId ? "both Storytellers" : "the Storyteller";
+      const ok = this.voice.stDead
+        ? confirm(`Bring ${who} back to life?`)
+        : confirm(`Mark ${who} as dead?`);
+      if (ok) voice.setStDead(!this.voice.stDead);
     },
     toggleUrgent() {
       voice.setUrgent(!this.voice.urgent);
@@ -424,6 +442,48 @@ export default {
         background: #ff6b6b;
         transform: rotate(45deg);
       }
+    }
+  }
+
+  // the dead marker, like a seat's: drawn over the top of the token, clickable
+  // (by Storytellers) only on a small box at the top
+  .st-shroud {
+    position: absolute;
+    top: 0;
+    left: 25%;
+    width: 50%;
+    height: 2.75vh; // a quarter of the 11vh token
+    z-index: 1;
+    pointer-events: none;
+    filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.8));
+    &.clickable {
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    &:before {
+      content: " ";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      width: 200%;
+      margin-left: -100%;
+      height: 4.95vh; // 45% of the token
+      background: url("../assets/shroud.png") center -10px no-repeat;
+      background-size: auto 110%;
+      opacity: 0;
+      transform: perspective(400px) scale(1.5);
+      transform-origin: top center;
+      transition: all 200ms;
+      pointer-events: none;
+    }
+    &.clickable:hover:before {
+      opacity: 0.5;
+      transform: scale(1);
+    }
+    &.dead:before,
+    &.dead.clickable:hover:before {
+      opacity: 1;
+      transform: perspective(400px) scale(1);
     }
   }
 

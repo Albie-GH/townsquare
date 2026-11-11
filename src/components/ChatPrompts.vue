@@ -1,5 +1,9 @@
 <template>
   <div class="chat-prompts" v-if="voice.joined">
+    <!-- the chat timer is about to close the room you're in (the bell is ringing) -->
+    <div class="prompt notice closing" v-if="closingIn > 0">
+      Private Room is closing in {{ closingIn }}
+    </div>
     <!-- your request is waiting because they are in a chat -->
     <div class="prompt" v-if="onHold">
       <div class="text">You are on hold</div>
@@ -36,7 +40,23 @@ import chatNames from "./chatNames";
 
 export default {
   mixins: [chatNames],
+  data() {
+    return { now: Date.now(), clock: null };
+  },
+  mounted() {
+    this.clock = setInterval(() => (this.now = Date.now()), 200);
+  },
+  beforeDestroy() {
+    clearInterval(this.clock);
+  },
   computed: {
+    // seconds until the chat timer closes your room, in the last 5 seconds only
+    // (private Storyteller chats don't close with the timer)
+    closingIn() {
+      if (!this.voice.timerActive || !this.myChat || this.myChat.whisper) return 0;
+      const left = Math.ceil((this.voice.timerEnd - this.now) / 1000);
+      return left > 0 && left <= 5 ? left : 0;
+    },
     // a private chat with the Storyteller, only you (and they) see this
     whisper() {
       return this.myChat && this.myChat.whisper ? this.myChat : null;
@@ -137,6 +157,10 @@ export default {
     &.notice {
       pointer-events: none;
       opacity: 0.9;
+    }
+    &.closing {
+      font-size: 120%;
+      font-variant-numeric: tabular-nums;
     }
     .buttons {
       display: flex;
