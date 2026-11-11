@@ -1,7 +1,12 @@
 <template>
   <div
     class="storyteller"
-    :class="{ speaking, cohost, 'menu-open': isMenuOpen || isTokenMenuOpen }"
+    :class="{
+      speaking,
+      cohost,
+      'menu-open': isMenuOpen || isTokenMenuOpen,
+      'muted-talking': isSelf && voice.mutedTalking
+    }"
   >
     <div
       class="st-token"
@@ -269,7 +274,20 @@ export default {
       return v === undefined ? 100 : v;
     }
   },
+  // a click anywhere outside this Storyteller token closes its open menus
+  mounted() {
+    document.addEventListener("pointerdown", this.closeIfOutside, true);
+  },
+  beforeDestroy() {
+    document.removeEventListener("pointerdown", this.closeIfOutside, true);
+  },
   methods: {
+    closeIfOutside(event) {
+      if (!this.isMenuOpen && !this.isTokenMenuOpen) return;
+      if (this.$el.contains(event.target)) return;
+      this.isMenuOpen = false;
+      this.isTokenMenuOpen = false;
+    },
     toggleMenu() {
       this.isTokenMenuOpen = false;
       if (this.hasNameMenu) this.isMenuOpen = !this.isMenuOpen;
@@ -503,6 +521,12 @@ export default {
   }
   &.speaking .speaking-ring {
     opacity: 1;
+  }
+  // only on your own token: you're talking, but muted so nobody hears it
+  &.muted-talking .speaking-ring {
+    opacity: 1;
+    border-color: #ff4d4d;
+    box-shadow: 0 0 12px 3px rgba(255, 77, 77, 0.7);
   }
 
   .st-plate {

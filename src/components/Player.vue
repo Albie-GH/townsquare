@@ -12,6 +12,7 @@
           'vote-yes': session.votes[index],
           'vote-lock': voteLocked,
           speaking,
+          'muted-talking': isYou && voice.mutedTalking,
           'hand-up': handUp,
           'has-mic': showMic,
           'out-of-room': outOfRoom,
@@ -556,7 +557,20 @@ export default {
       this.revealFrom = value ? this.roleById(old) : null;
     }
   },
+  // a click anywhere outside this seat closes its open menus
+  mounted() {
+    document.addEventListener("pointerdown", this.closeIfOutside, true);
+  },
+  beforeDestroy() {
+    document.removeEventListener("pointerdown", this.closeIfOutside, true);
+  },
   methods: {
+    closeIfOutside(event) {
+      if (!this.isMenuOpen && !this.isTokenMenuOpen) return;
+      if (this.$el.contains(event.target)) return;
+      this.isMenuOpen = false;
+      this.isTokenMenuOpen = false;
+    },
     changePronouns() {
       if (this.session.isSpectator && this.player.id !== this.session.playerId)
         return;
@@ -1304,6 +1318,12 @@ li.move:not(.from) .player .overlay svg.move {
 }
 .player.speaking .speaking-ring {
   opacity: 1;
+}
+// only on your own seat: you're talking, but you're muted so nobody hears it
+.player.muted-talking .speaking-ring {
+  opacity: 1;
+  border-color: #ff4d4d;
+  box-shadow: 0 0 12px 3px rgba(255, 77, 77, 0.7);
 }
 
 /***** Raised hand *****/

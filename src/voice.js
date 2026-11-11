@@ -9,8 +9,13 @@ const ICE = {
   ]
 };
 
-const SPEAKING_LEVEL = 12; // mic level (0-100) above which someone counts as talking
+// Talking ring: loudness (RMS, in dB) above which a sound counts as talking. Quiet
+// enough to catch anything that really gets sent; your own ring also waits for the
+// noise gate, so it lights exactly when the gate lets your sound through.
+const SPEAKING_DB = -55;
 const SPEAKING_HOLD_MS = 350; // keep the ring lit briefly so it doesn't flicker
+// talking while muted is judged on the raw mic (no noise filter), so it needs a bit more
+const MUTED_TALK_LEVEL = 12;
 const VOLUME_KEY = "botcVoiceVolumes";
 const HOST_NAME_KEY = "botcStorytellerName";
 const DEFAULT_HOST_NAME = "Storyteller"; // means "no custom name set"
@@ -25,21 +30,38 @@ function loadHostName() {
 
 const RNNOISE_URL = (process.env.BASE_URL || "/") + "rnnoise/";
 
-const GATE_KEY = "botcNoiseGate";
-const DEFAULT_GATE = 80; // noise gate strength until the player picks their own
+const GATE_KEY = "botcNoiseGate2";
+const OLD_GATE_KEY = "botcNoiseGate"; // the weaker scale the slider used to have
+const DEFAULT_GATE = 50; // noise gate strength until the player picks their own
+
+// gate strength 0-100 -> threshold in dB (0 = off, 50 = -34dB, 100 = -10dB)
+function gateDb(level) {
+  return level <= 0 ? -100 : -58 + level * 0.48;
+}
+
+// a setting saved on the old scale (0-100 = -70dB to -25dB) moves to the
+// new number that gives the same strength, so nobody's gate changes
+function fromOldGate(old) {
+  if (old <= 0) return 0;
+  const db = -70 + old * 0.45;
+  return Math.max(1, Math.min(100, Math.round((db + 58) / 0.48)));
+}
 
 function loadGatePref() {
   try {
     const saved = localStorage.getItem(GATE_KEY);
-    return saved === null ? DEFAULT_GATE : parseInt(saved, 10) || 0;
+    if (saved !== null) return parseInt(saved, 10) || 0;
+    const old = localStorage.getItem(OLD_GATE_KEY);
+    if (old !== null) {
+      const level = fromOldGate(parseInt(old, 10) || 0);
+      localStorage.setItem(GATE_KEY, String(level));
+      localStorage.removeItem(OLD_GATE_KEY);
+      return level;
+    }
+    return DEFAULT_GATE;
   } catch (e) {
     return DEFAULT_GATE;
   }
-}
-
-// gate strength 0-100 -> threshold in dB (0 = off, 100 = -25dB)
-function gateDb(level) {
-  return level <= 0 ? -100 : -70 + level * 0.45;
 }
 
 function loadVolumes() {
@@ -60,6 +82,7 @@ class VoiceChat {
       error: "",
       peers: [], // { id, name, playerId, hear, talk, speaking, status, rtt, route }
       speakingIds: [], // playerIds currently talking, including your own
+      mutedTalking: false, // you're talking but muted, so nobody hears you (only you see this)
       lineSpeakingIds: [], // Storytellers heard talking only over the Storytellers' line
       volumes: loadVolumes(), // playerId -> 0-100, how loud you hear each player
       hostPlayerId: "", // playerId of the storyteller in the voice room, if known
@@ -130,6 +153,9 @@ class VoiceChat {
     this._ctx = null;
     this._selfMeter = null;
     this._selfLoud = 0;
+    this._probeTrack = null; // a copy of your mic that stays on, only to notice you talking while muted
+    this._probeMeter = null;
+    this._mutedLoud = 0;
     this._speakingKey = "";
     this._tickTimer = null;
     this._statsTimer = null;
@@ -175,6 +201,15 @@ class VoiceChat {
     this._ctx.onstatechange = () => this._activatePipeline();
     this._selfMeter = this._makeMeter(this._stream);
     this._rawTrack = this._track;
+    // muting switches the mic itself off, so a separate copy is kept on (never sent
+    // anywhere) to light your ring red when you talk while muted
+    try {
+      this._probeTrack = this._rawTrack.clone();
+      this._probeTrack.enabled = true;
+      this._probeMeter = this._makeMeter(new MediaStream([this._probeTrack]));
+    } catch (e) {
+      this._probeTrack = this._probeMeter = null;
+    }
     this._applyBrowserNs();
     this._initDenoise(gen);
 
@@ -1017,7 +1052,7 @@ class VoiceChat {
       playerId: info.playerId || "",
       meter: null,
       lastLoud: 0,
-      statLevel: 0, // 0-100 from the WebRTC receiver stats, independent of the analyser
+      statDb: -100, // loudness (dB) from the WebRTC receiver stats, independent of the analyser
       isHost: !!info.isHost
     };
     audio.muted = this.state.allMuted && !info.isHost;
@@ -1147,7 +1182,7 @@ class VoiceChat {
       const mix = ctx.createGain();
       const dest = ctx.createMediaStreamDestination();
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
+      analyser.fftSize = 2048;
       source.connect(dry);
       dry.connect(mix);
       node.connect(wet);
@@ -1276,9 +1311,32 @@ class VoiceChat {
 
   _makeMeter(stream) {
     const analyser = this._ctx.createAnalyser();
-    analyser.fftSize = 512;
+    analyser.fftSize = 2048;
     this._ctx.createMediaStreamSource(stream).connect(analyser);
     return { analyser, data: new Uint8Array(analyser.fftSize) };
+  }
+
+  // Loudness of the last stretch of audio in dB (RMS, like the noise gate measures it).
+  // Uses the full float samples, so quiet sounds don't round down to silence.
+  _dbOf(meter) {
+    if (!meter) return -100;
+    const a = meter.analyser;
+    if (!meter.fdata || meter.fdata.length !== a.fftSize) {
+      meter.fdata = new Float32Array(a.fftSize);
+    }
+    a.getFloatTimeDomainData(meter.fdata);
+    let sum = 0;
+    for (const v of meter.fdata) sum += v * v;
+    const rms = Math.sqrt(sum / meter.fdata.length);
+    return rms > 0 ? 20 * Math.log10(rms) : -100;
+  }
+
+  // what your own sound has to reach to be sent: the noise gate's threshold
+  // (once the noise filter is running), and never below the talking floor
+  _selfSpeakingDb() {
+    const p = this._pipeline;
+    const gated = p && p.active && p.gate && this.state.gate > 0;
+    return Math.max(SPEAKING_DB, gated ? gateDb(this.state.gate) : -100);
   }
 
   _levelOf(meter) {
@@ -1294,7 +1352,19 @@ class VoiceChat {
     const now = Date.now();
     const level = this._trackOn ? this._levelOf(this._selfMeter) : 0;
     if (level !== this.state.level) this.state.level = level;
-    if (this._trackOn && level >= SPEAKING_LEVEL) this._selfLoud = now;
+    if (this._trackOn && this._dbOf(this._selfMeter) >= this._selfSpeakingDb()) {
+      this._selfLoud = now;
+    }
+
+    // talking while nothing of yours is being sent anywhere
+    let mutedTalking = false;
+    if (!this._trackOn && this._probeMeter) {
+      if (this._levelOf(this._probeMeter) >= MUTED_TALK_LEVEL) this._mutedLoud = now;
+      mutedTalking = now - this._mutedLoud < SPEAKING_HOLD_MS;
+    }
+    if (mutedTalking !== this.state.mutedTalking) {
+      this.state.mutedTalking = mutedTalking;
+    }
 
     // the portrait ring is for the Town Square and rooms; the line button lights
     // whenever the Storytellers' line is carrying your voice (both can be lit)
@@ -1307,8 +1377,9 @@ class VoiceChat {
     for (const [id, c] of this._conns) {
       // Each peer is judged on its own, using whichever signal is louder, so any
       // number of people can be lit at once.
-      const peerLevel = Math.max(this._levelOf(c.meter), c.statLevel);
-      if (peerLevel >= SPEAKING_LEVEL) c.lastLoud = now;
+      // what arrives has already been through their noise gate, so any real sound counts
+      const peerDb = Math.max(this._dbOf(c.meter), c.statDb);
+      if (peerDb >= SPEAKING_DB) c.lastLoud = now;
       const isSpeaking = now - c.lastLoud < SPEAKING_HOLD_MS;
       this._patch(id, { speaking: isSpeaking });
       if (!isSpeaking || !c.playerId) continue;
@@ -1335,7 +1406,7 @@ class VoiceChat {
       await Promise.all(
         [...this._conns.values()].map(async c => {
           if (c.pc.connectionState !== "connected") {
-            c.statLevel = 0;
+            c.statDb = -100;
             return;
           }
           const stats = await c.pc.getStats();
@@ -1345,7 +1416,7 @@ class VoiceChat {
               if (r.audioLevel != null) level = Math.max(level, r.audioLevel);
             }
           });
-          c.statLevel = Math.min(100, Math.round(level * 400));
+          c.statDb = level > 0 ? 20 * Math.log10(level) : -100;
         })
       );
     } catch (e) {
@@ -1419,6 +1490,10 @@ class VoiceChat {
     this._names.clear();
     this._disposePipeline();
     if (this._stream) this._stream.getTracks().forEach(t => t.stop());
+    if (this._probeTrack) this._probeTrack.stop();
+    this._probeTrack = this._probeMeter = null;
+    this._mutedLoud = 0;
+    this.state.mutedTalking = false;
     if (this._ctx) this._ctx.close();
     this._stream = this._track = this._rawTrack = null;
     this._ctx = this._selfMeter = null;
