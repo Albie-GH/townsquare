@@ -269,6 +269,7 @@ class LiveSession {
       isDead: player.isDead,
       isVoteless: player.isVoteless,
       pronouns: player.pronouns,
+      revealed: player.revealed || "",
       ...(player.role && player.role.team === "traveler"
         ? { roleId: player.role.id }
         : {})
@@ -333,7 +334,7 @@ class LiveSession {
       const player = players[x];
       const { roleId } = state;
       // update relevant properties
-      ["name", "id", "isDead", "isVoteless", "pronouns"].forEach(property => {
+      ["name", "id", "isDead", "isVoteless", "pronouns", "revealed"].forEach(property => {
         const value = state[property];
         if (player[property] !== value) {
           this._store.commit("players/update", { player, property, value });

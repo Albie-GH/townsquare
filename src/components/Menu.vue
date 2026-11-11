@@ -259,7 +259,7 @@
           </li>
           <li @click="toggleModal('nightOrder')">
             Night Order Sheet
-            <em>[N]</em>
+            <em>[O]</em>
           </li>
           <li @click="toggleModal('gameState')">
             Game State JSON

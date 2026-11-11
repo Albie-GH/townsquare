@@ -2,7 +2,7 @@
   <div class="storyteller" :class="{ speaking }">
     <div
       class="st-token"
-      :class="{ clickable: canRequest }"
+      :class="{ clickable: canRequest, 'out-of-room': outOfRoom }"
       @click="toggleTokenMenu"
     >
       <font-awesome-icon icon="theater-masks" />
@@ -59,7 +59,7 @@
           <input
             type="range"
             min="0"
-            max="100"
+            max="200"
             step="5"
             :value="volume"
             @input="setVolume"
@@ -109,6 +109,13 @@ export default {
     isMuted() {
       // Town Square mute; private chats have their own toggle in the room list
       return !!this.hostId && this.voice.mutedIds.includes(this.hostId);
+    },
+    // darkened while you're in a private room the Storyteller isn't (visibly) in
+    outOfRoom() {
+      const mine = voice.chatOf(this.session.playerId);
+      if (!mine) return false;
+      const theirs = voice.chatOf(this.hostId);
+      return !(theirs && theirs.id === mine.id);
     },
     showMic() {
       return this.voice.joined && (this.canRename || this.isMuted);
@@ -184,6 +191,9 @@ export default {
     justify-content: center;
     pointer-events: none;
     cursor: default;
+    &.out-of-room {
+      filter: brightness(0.35);
+    }
     &.clickable {
       pointer-events: auto;
       cursor: pointer;
@@ -332,6 +342,13 @@ export default {
           width: 90px;
           margin: 0 6px;
           cursor: pointer;
+        }
+        // fixed width so "100%" doesn't widen the menu mid-drag
+        span {
+          display: inline-block;
+          min-width: 4ch;
+          text-align: right;
+          font-variant-numeric: tabular-nums;
         }
       }
     }

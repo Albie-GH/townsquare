@@ -5,7 +5,7 @@
       ref="text"
       v-model="text"
       placeholder="Your private notes. Only you can see these."
-      @keyup.stop=""
+      @keyup.stop="onKey"
     ></textarea>
   </Modal>
 </template>
@@ -51,7 +51,11 @@ export default {
     }
   },
   methods: {
-    ...mapMutations(["toggleModal"])
+    ...mapMutations(["toggleModal"]),
+    // typing doesn't trigger shortcuts, but Esc still closes the notepad
+    onKey(event) {
+      if (event.key === "Escape") this.toggleModal("notepad");
+    }
   }
 };
 </script>

@@ -14,7 +14,9 @@
           speaking,
           'hand-up': handUp,
           'has-mic': showMic,
-          'out-of-room': outOfRoom
+          'out-of-room': outOfRoom,
+          revealed: !!player.revealed,
+          'revealed-drunk': player.revealed === 'drunk'
         },
         player.role.team
       ]"
@@ -45,6 +47,12 @@
         :role="player.role"
         @set-role="onTokenClick"
       />
+      <!-- End of Game: like hiding the grimoire, the portrait and the revealed
+           role are two sides of a card, and "Reveal as Drunk" turns it once more -->
+      <template v-if="showReveal">
+        <Token class="reveal-face role" :role="roleFaceRole || {}" />
+        <Token class="reveal-face drunk" :role="drunkRole || {}" />
+      </template>
       <div class="speaking-ring"></div>
       <div class="hand-raised" v-if="handUp" title="Hand raised">
         <font-awesome-icon icon="hand-paper" />
@@ -160,6 +168,12 @@
             <li @click="removeMark" v-if="session.markedPlayer === index">
               <font-awesome-icon icon="skull" />Remove mark
             </li>
+            <li @click="reveal(player.role.id)" v-if="canReveal">
+              <font-awesome-icon icon="eye" />Reveal Role
+            </li>
+            <li @click="reveal('drunk')" v-if="canRevealDrunk">
+              <font-awesome-icon icon="wine-bottle" />Reveal as Drunk
+            </li>
             <li
               @click="nominatePlayer()"
               v-if="!session.nomination && voice.phase === 'dusk'"
@@ -237,7 +251,7 @@
             <input
               type="range"
               min="0"
-              max="100"
+              max="200"
               step="5"
               :value="volume"
               @input="setVolume"
@@ -373,6 +387,35 @@ export default {
     theirChat: function() {
       return voice.chatOf(this.player.id);
     },
+    // End of Game: the reveal card is there (face down) all through the phase
+    showReveal: function() {
+      return this.voice.phase === "end" || !!this.player.revealed;
+    },
+    // the role side: the revealed role, or (after "Reveal as Drunk") the one shown before
+    roleFaceRole: function() {
+      const id = this.player.revealed;
+      if (id && id !== "drunk") return this.roleById(id);
+      return this.revealFrom;
+    },
+    drunkRole: function() {
+      return this.roleById("drunk");
+    },
+    canReveal: function() {
+      return (
+        this.voice.phase === "end" &&
+        !!this.player.role &&
+        !!this.player.role.id &&
+        !this.player.revealed
+      );
+    },
+    // after revealing, the Storyteller can show they were really the Drunk
+    canRevealDrunk: function() {
+      return (
+        this.voice.phase === "end" &&
+        !!this.player.revealed &&
+        this.player.revealed !== "drunk"
+      );
+    },
     // while you're in a private chat, everyone not in it is darkened
     outOfRoom: function() {
       if (!this.myChat) return false;
@@ -467,8 +510,14 @@ export default {
       isMenuOpen: false,
       isTokenMenuOpen: false,
       isSwap: false,
-      voice: voice.state
+      voice: voice.state,
+      revealFrom: null // the role shown before this reveal, so "Reveal as Drunk" flips from it
     };
+  },
+  watch: {
+    "player.revealed"(value, old) {
+      this.revealFrom = value ? this.roleById(old) : null;
+    }
   },
   methods: {
     changePronouns() {
@@ -620,6 +669,18 @@ export default {
       }));
       voice.sendGrimoire(this.player.id, seats);
     },
+    reveal(roleId) {
+      this.isTokenMenuOpen = false;
+      this.updatePlayer("revealed", roleId);
+    },
+    roleById(id) {
+      if (!id) return null;
+      return (
+        this.$store.state.roles.get(id) ||
+        this.$store.getters.rolesJSONbyId.get(id) ||
+        null
+      );
+    },
     startWhisper() {
       this.isTokenMenuOpen = false;
       voice.whisper(this.player.id);
@@ -736,6 +797,35 @@ export default {
   #townsquare:not(.spectator) &.dead .shroud:hover:before {
     opacity: 1;
   }
+
+  // End of Game: once the role is revealed, the dead marker fades so the role shows
+  #townsquare &.dead.revealed .shroud:before,
+  #townsquare:not(.spectator) &.dead.revealed .shroud:hover:before {
+    opacity: 0.4;
+  }
+}
+
+/****** End of Game reveal ******/
+// Like hiding the grimoire: the seat's portrait turns away as the revealed role turns
+// in (both sides of one card), then the role turns away as the Drunk turns in.
+.player .token.reveal-face {
+  z-index: 1;
+  pointer-events: none;
+  background-image: url("../assets/life.png");
+  transform: perspective(400px) rotateY(180deg) !important;
+  transition: transform 600ms ease-in-out;
+}
+.player.revealed .token.reveal-face.role,
+.player.revealed-drunk .token.reveal-face.drunk {
+  transform: perspective(400px) rotateY(0deg) !important;
+}
+.player.revealed-drunk .token.reveal-face.role {
+  transform: perspective(400px) rotateY(-180deg) !important;
+}
+#townsquare .circle .player.revealed > .token:not(.reveal-face),
+#townsquare.public .circle .player.revealed > .life {
+  transform: perspective(400px) rotateY(-180deg) !important;
+  transition-duration: 600ms;
 }
 
 /****** Life token *******/
@@ -1225,9 +1315,16 @@ li.move:not(.from) .player .overlay svg.move {
     color: inherit;
   }
   input {
-    width: 90px;
+    width: 150px;
     margin: 0 6px;
     cursor: pointer;
+  }
+  // fixed width so "100%" doesn't widen the menu (and move the slider) mid-drag
+  span {
+    display: inline-block;
+    min-width: 5ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 }
 

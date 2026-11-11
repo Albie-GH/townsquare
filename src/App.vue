@@ -1,7 +1,6 @@
 <template>
   <div
     id="app"
-    @keyup="keyup"
     tabindex="-1"
     :class="{
       night: grimoire.isNight,
@@ -89,7 +88,27 @@ export default {
       version
     };
   },
+  // Hotkeys listen on the whole page, so they keep working whatever has focus
+  // (e.g. after the notepad closes and its text box disappears)
+  mounted() {
+    document.addEventListener("keyup", this.onKeyup);
+  },
+  beforeDestroy() {
+    document.removeEventListener("keyup", this.onKeyup);
+  },
   methods: {
+    onKeyup(event) {
+      // typing into a text box or input is never a hotkey
+      const t = event.target;
+      if (
+        t &&
+        (t.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))
+      ) {
+        return;
+      }
+      this.keyup(event);
+    },
     keyup({ key, ctrlKey, metaKey }) {
       if (ctrlKey || metaKey) return;
       switch (key.toLocaleLowerCase()) {
@@ -108,10 +127,10 @@ export default {
         case "r":
           this.$store.commit("toggleModal", "reference");
           break;
-        case "n":
+        case "o":
           this.$store.commit("toggleModal", "nightOrder");
           break;
-        case "p":
+        case "n":
           this.$store.commit("toggleModal", "notepad");
           break;
         case "m":

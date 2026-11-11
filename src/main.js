@@ -28,6 +28,8 @@ const faIcons = [
   "Dragon",
   "ExchangeAlt",
   "ExclamationTriangle",
+  "Eye",
+  "FlagCheckered",
   "FileCode",
   "FileUpload",
   "HandPaper",
@@ -60,6 +62,7 @@ const faIcons = [
   "VolumeUp",
   "VolumeMute",
   "VoteYea",
+  "WineBottle",
   "WindowMaximize",
   "WindowMinimize"
 ];

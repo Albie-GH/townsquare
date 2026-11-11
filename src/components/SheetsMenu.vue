@@ -12,12 +12,12 @@
     >
       <font-awesome-icon icon="moon" />
       <span>Night Order Sheet</span>
-      <em>[N]</em>
+      <em>[O]</em>
     </li>
     <li @click="toggleModal('notepad')" :class="{ active: modals.notepad }">
       <font-awesome-icon icon="sticky-note" />
       <span>Notepad</span>
-      <em>[P]</em>
+      <em>[N]</em>
     </li>
     <!-- your mic wherever you are: your private chat, or the Town Square -->
     <li

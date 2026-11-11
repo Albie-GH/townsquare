@@ -1,3 +1,5 @@
+import Vue from "vue";
+
 const NEWPLAYER = {
   name: "",
   id: "",
@@ -5,7 +7,8 @@ const NEWPLAYER = {
   reminders: [],
   isVoteless: false,
   isDead: false,
-  pronouns: ""
+  pronouns: "",
+  revealed: "" // End of Game: role id the Storyteller has revealed on this seat
 };
 
 const state = () => ({
@@ -113,7 +116,8 @@ const mutations = {
   update(state, { player, property, value }) {
     const index = state.players.indexOf(player);
     if (index >= 0) {
-      state.players[index][property] = value;
+      // Vue.set so properties older saved players lack (e.g. revealed) stay reactive
+      Vue.set(state.players[index], property, value);
     }
   },
   add(state, name) {

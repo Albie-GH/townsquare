@@ -275,7 +275,7 @@ wss.on("connection", ws => {
     if (msg.type === "phase" && room) {
       const members = rooms.get(room);
       const me = members && members.get(id);
-      if (me && me.isHost && ["day", "dusk", "night"].includes(msg.phase)) {
+      if (me && me.isHost && ["day", "dusk", "night", "end"].includes(msg.phase)) {
         setPhase(room, getGame(room), msg.phase);
       }
     }

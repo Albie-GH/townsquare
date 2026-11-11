@@ -59,7 +59,8 @@ export default {
       phases: [
         { id: "day", label: "Day", icon: "sun" },
         { id: "dusk", label: "Dusk", icon: "cloud-sun" },
-        { id: "night", label: "Night", icon: "moon" }
+        { id: "night", label: "Night", icon: "moon" },
+        { id: "end", label: "End of Game", icon: "flag-checkered" }
       ]
     };
   },
@@ -69,19 +70,14 @@ export default {
     canEdit() {
       return !this.session.isSpectator;
     },
+    current() {
+      return this.phases.find(p => p.id === this.voice.phase) || this.phases[0];
+    },
     icon() {
-      return this.voice.phase === "night"
-        ? "moon"
-        : this.voice.phase === "dusk"
-        ? "cloud-sun"
-        : "sun";
+      return this.current.icon;
     },
     label() {
-      return this.voice.phase === "night"
-        ? "Night"
-        : this.voice.phase === "dusk"
-        ? "Dusk"
-        : "Day";
+      return this.current.label;
     },
     seconds() {
       return Math.max(0, Math.ceil((this.voice.timerEnd - this.now) / 1000));
@@ -105,6 +101,18 @@ export default {
     setPhase(phase) {
       this.isMenuOpen = false;
       voice.setPhase(phase);
+      // leaving the End of Game: turn every revealed role back over
+      if (phase !== "end") {
+        this.$store.state.players.players.forEach(player => {
+          if (player.revealed) {
+            this.$store.commit("players/update", {
+              player,
+              property: "revealed",
+              value: ""
+            });
+          }
+        });
+      }
       const night = phase === "night";
       if (!!this.$store.state.grimoire.isNight !== night) {
         this.$store.commit("toggleNight", night);
@@ -172,6 +180,9 @@ export default {
   }
   &.night .phase svg {
     color: #8fb4ff;
+  }
+  &.end .phase svg {
+    color: #e0e0e0;
   }
   .timer {
     font-weight: bold;

@@ -482,8 +482,49 @@ class VoiceChat {
     if (!c) return;
     const peer = this.state.peers.find(p => p.id === id);
     const hear = peer ? peer.hear : true;
-    c.audio.muted =
-      !hear || this._forced(c) || !this._audible(c);
+    const silent = !hear || this._forced(c) || !this._audible(c);
+    if (c.boost) {
+      // boosted: the audio element stays muted and the gain node plays instead
+      c.audio.muted = true;
+      c.boost.gain.gain.value = silent ? 0 : this._volumeFor(c.playerId);
+    } else {
+      c.audio.muted = silent;
+    }
+  }
+
+  // Volume up to 100% uses the audio element. Above that (mic boost, up to 200%)
+  // the player's audio is played through a Web Audio gain node instead, since
+  // an audio element can't go louder than 100%.
+  _applyVolume(id) {
+    const c = this._conns.get(id);
+    if (!c) return;
+    const v = this._volumeFor(c.playerId);
+    const stream = c.audio.srcObject;
+    if (v > 1 && this._ctx && stream) {
+      if (!c.boost) {
+        const source = this._ctx.createMediaStreamSource(stream);
+        const gain = this._ctx.createGain();
+        source.connect(gain);
+        gain.connect(this._ctx.destination);
+        c.boost = { source, gain, stream };
+      }
+      c.audio.volume = 1;
+    } else {
+      this._dropBoost(c);
+      c.audio.volume = Math.min(1, v);
+    }
+    this._syncAudio(id);
+  }
+
+  _dropBoost(c) {
+    if (!c.boost) return;
+    try {
+      c.boost.source.disconnect();
+      c.boost.gain.disconnect();
+    } catch (e) {
+      // already disconnected
+    }
+    c.boost = null;
   }
 
   // Private chats: inside a chat you only hear the people in it, and outside
@@ -513,7 +554,7 @@ class VoiceChat {
 
   // Storyteller only: day, dusk or night. Ends the chat timer and any private chats.
   setPhase(phase) {
-    if (!this.state.isHost || !["day", "dusk", "night"].includes(phase)) return;
+    if (!this.state.isHost || !["day", "dusk", "night", "end"].includes(phase)) return;
     this.state.phase = phase;
     if (this.state.timerActive) this._setTimer(0);
     this._send({ type: "phase", phase });
@@ -593,18 +634,18 @@ class VoiceChat {
     this._patch(id, { talk: on });
   }
 
-  // How loud one player is for you only (0-100). Saved per player in this browser.
+  // How loud one player is for you only (0-200, over 100 is a boost). Saved per player in this browser.
   setVolume(playerId, percent) {
     if (!playerId) return;
-    const v = Math.max(0, Math.min(100, Math.round(percent)));
+    const v = Math.max(0, Math.min(200, Math.round(percent)));
     this.state.volumes = { ...this.state.volumes, [playerId]: v };
     try {
       localStorage.setItem(VOLUME_KEY, JSON.stringify(this.state.volumes));
     } catch (e) {
       // storage unavailable, the volume just won't be remembered
     }
-    for (const c of this._conns.values()) {
-      if (c.playerId === playerId) c.audio.volume = v / 100;
+    for (const [id, c] of this._conns) {
+      if (c.playerId === playerId) this._applyVolume(id);
     }
   }
 
@@ -750,7 +791,7 @@ class VoiceChat {
     const pc = new RTCPeerConnection(ICE);
     const audio = new Audio();
     audio.autoplay = true;
-    audio.volume = this._volumeFor(info.playerId);
+    audio.volume = Math.min(1, this._volumeFor(info.playerId));
     const sender = pc.addTrack(this._track, this._stream);
     const conn = {
       pc,
@@ -769,6 +810,9 @@ class VoiceChat {
       audio.srcObject = e.streams[0];
       audio.play().catch(() => {}); // blocked until the first click, see _unlock
       if (this._ctx) conn.meter = this._makeMeter(e.streams[0]);
+      // a boost set up for an older stream has to be rebuilt for this one
+      if (conn.boost && conn.boost.stream !== e.streams[0]) this._dropBoost(conn);
+      this._applyVolume(id);
     };
     pc.onicecandidate = e => {
       if (e.candidate) {
@@ -809,6 +853,7 @@ class VoiceChat {
   _removePeer(id) {
     const c = this._conns.get(id);
     if (c) {
+      this._dropBoost(c);
       c.pc.close();
       c.audio.srcObject = null;
       this._conns.delete(id);
@@ -1128,9 +1173,10 @@ class VoiceChat {
     const ws = this._ws;
     this._ws = null;
     if (ws) ws.close();
-    for (const { pc, audio } of this._conns.values()) {
-      pc.close();
-      audio.srcObject = null;
+    for (const c of this._conns.values()) {
+      this._dropBoost(c);
+      c.pc.close();
+      c.audio.srcObject = null;
     }
     this._conns.clear();
     this._names.clear();
