@@ -2,40 +2,28 @@
   <div class="bottom-right">
     <!-- where your voice is being heard right now, and your mute button -->
     <ul class="panel mic-status" v-if="voice.joined">
-      <li class="status" :class="{ off: !townHeard }" :title="townTitle">
+      <li class="status" :class="{ off: !townHeard }">
         <font-awesome-icon :icon="townHeard ? 'microphone' : 'microphone-slash'" />
-        <span>Town</span>
+        <span>{{ voice.tsLocked ? "Town (muted by storyteller)" : "Town" }}</span>
       </li>
-      <li
-        class="status"
-        v-if="myChat"
-        :class="{ off: !roomHeard }"
-        :title="roomHeard ? 'Heard in this chat' : 'Muted in this chat'"
-      >
+      <li class="status" v-if="myChat" :class="{ off: !roomHeard }">
         <font-awesome-icon :icon="roomHeard ? 'microphone' : 'microphone-slash'" />
-        <span>{{ roomName }}</span>
+        <span>{{
+          voice.roomLocked ? roomName + " (muted by storyteller)" : roomName
+        }}</span>
       </li>
-      <li
-        class="status"
-        v-if="showLine"
-        :class="{ off: !lineHeard }"
-        :title="lineHeard ? 'Heard on the Storytellers’ line' : 'Off on the Storytellers’ line'"
-      >
+      <li class="status" v-if="showLine" :class="{ off: !lineHeard }">
         <font-awesome-icon :icon="lineHeard ? 'microphone' : 'microphone-slash'" />
         <span>Storyteller line</span>
       </li>
       <!-- your mic wherever you are: your private chat, or the Town Square -->
-      <li
-        class="button"
-        @click="toggleMic"
-        :class="{ active: !voice.micOn }"
-        :title="voice.micLocked ? 'Muted by the Storyteller' : ''"
-      >
+      <li class="button" @click="toggleMic" :class="{ active: !voice.micOn }">
         <font-awesome-icon
           :icon="voice.micOn ? 'microphone' : 'microphone-slash'"
         />
-        <span>{{ voice.micOn ? "Mute" : "Unmute" }}</span>
+        <span>{{ buttonLabel }}</span>
         <em>[M]</em>
+        <div class="tip" v-if="buttonTitle">{{ buttonTitle }}</div>
       </li>
     </ul>
     <!-- quick links to the reference sheets and your notepad -->
@@ -82,9 +70,23 @@ export default {
     townHeard() {
       return !this.myChat && this.voice.tsMicOn;
     },
-    townTitle() {
-      if (this.myChat) return "Not heard in town while you're in a private chat";
-      return this.townHeard ? "Heard in town" : "Muted in town";
+    // muted by the Storyteller where you are right now
+    locked() {
+      return this.myChat ? this.voice.roomLocked : this.voice.tsLocked;
+    },
+    // your own choice there, which takes over once the Storyteller unmutes you
+    chosenMuted() {
+      return this.myChat ? !this.voice.roomMicOn : this.voice.tsSelfMuted;
+    },
+    buttonLabel() {
+      if (this.locked) return this.chosenMuted ? "Unmute" : "Stay Muted";
+      return this.voice.micOn ? "Mute" : "Unmute";
+    },
+    buttonTitle() {
+      if (!this.locked) return "";
+      return this.chosenMuted
+        ? "You'll stay muted when the Storyteller unmutes you. Click to be unmuted then."
+        : "You'll be unmuted when the Storyteller unmutes you. Click to stay muted.";
     },
     roomHeard() {
       return !!this.myChat && this.voice.micOn;
@@ -133,12 +135,22 @@ export default {
   margin: 0;
   padding: 0;
   list-style: none;
-  overflow: hidden;
   border: 3px solid black;
   border-radius: 10px;
   box-shadow: 0 0 10px black;
 
+  // rounded ends on the rows themselves (no overflow clipping, so tips can show)
+  li:first-child {
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+  }
+  li:last-child {
+    border-bottom-left-radius: 7px;
+    border-bottom-right-radius: 7px;
+  }
+
   li {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -165,6 +177,46 @@ export default {
       font-style: normal;
       opacity: 0.6;
       font-size: 85%;
+    }
+
+    // the mute button's hover text, styled like a character's ability on its token, opening to the
+    // left (the panel sits against the right edge) with its arrow pointing back
+    .tip {
+      position: absolute;
+      right: calc(100% + 18px);
+      top: 50%;
+      transform: translateY(-50%);
+      width: 250px;
+      padding: 5px 10px;
+      z-index: 25;
+      font-size: 80%;
+      font-weight: normal;
+      color: white;
+      white-space: normal;
+      text-align: left;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 10px;
+      border: 3px solid black;
+      filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.5));
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 200ms ease-in-out;
+
+      &:before {
+        content: " ";
+        position: absolute;
+        top: 50%;
+        left: 100%;
+        margin-top: -10px;
+        margin-left: 2px;
+        width: 0;
+        height: 0;
+        border: 10px solid transparent;
+        border-left-color: black;
+      }
+    }
+    &:hover .tip {
+      opacity: 1;
     }
 
     // where you are heard: information only, not clickable

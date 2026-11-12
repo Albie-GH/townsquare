@@ -109,6 +109,9 @@ class VoiceChat {
       lockedMute: false, // the Storyteller has muted you personally (Town Square)
       roomMicOn: true, // your own mute toggle inside a private chat
       tsMicOn: true, // your Town Square mic: your own toggle, and not muted by the Storyteller
+      tsSelfMuted: false, // your own Town Square toggle (what happens once the Storyteller unmutes you)
+      tsLocked: false, // the Storyteller has you muted in the Town Square
+      roomLocked: false, // the Storyteller has you muted in your private chat
       roomMutedIds: [], // playerIds muted inside their private chat
       micLocked: false, // the Storyteller has muted you where you are right now
       bluffsPulse: 0, // goes up each time the Storyteller sends you demon bluffs
@@ -246,30 +249,33 @@ class VoiceChat {
   }
 
   // Your mic where you are right now: in your private chat if you are in one, else the Town Square
+  // The mute button / [M]: your mic where you are. While the Storyteller has you muted
+  // it still flips your own choice ("Stay Muted" / "Unmute"), which takes effect
+  // once the Storyteller unmutes you.
   toggleMic() {
-    if (this.chatOf(this._playerId)) this.toggleRoomMic();
-    else this.toggleTsMic();
+    if (this.chatOf(this._playerId)) this.toggleRoomMic(true);
+    else this.toggleTsMic(true);
   }
 
   // Town Square mute (your seat / Storyteller token). Players can always mute,
-  // but can't unmute while the Storyteller has them muted.
-  toggleTsMic() {
+  // but can't unmute while the Storyteller has them muted (unless choosing for later).
+  toggleTsMic(choose = false) {
     if (!this._track) return;
     const locked =
       !this.state.isHost && (this.state.lockedMute || this.state.allMuted);
-    if (locked && this._selfMuted) return;
+    if (locked && this._selfMuted && !choose) return;
     this._selfMuted = !this._selfMuted;
     this._applyMic();
   }
 
   // Private chat mute (next to your name in the room)
-  toggleRoomMic() {
+  toggleRoomMic(choose = false) {
     if (!this._track) return;
     const mine = this.chatOf(this._playerId);
     if (!mine) return;
     const locked =
       !this.state.isHost && (mine.muted || []).includes(this._playerId);
-    if (locked && this._roomSelfMuted) return;
+    if (locked && this._roomSelfMuted && !choose) return;
     this._roomSelfMuted = !this._roomSelfMuted;
     this._applyMic();
   }
@@ -292,10 +298,11 @@ class VoiceChat {
     if (urgent) on = false;
     this.state.micLocked = locked;
     this.state.roomMicOn = !this._roomSelfMuted;
-    this.state.tsMicOn =
-      !this._selfMuted &&
-      !urgent &&
-      !(!host && (this.state.lockedMute || this.state.allMuted));
+    this.state.tsSelfMuted = this._selfMuted;
+    this.state.tsLocked = !host && (this.state.lockedMute || this.state.allMuted);
+    this.state.roomLocked =
+      !host && !!mine && (mine.muted || []).includes(this._playerId);
+    this.state.tsMicOn = !this._selfMuted && !urgent && !this.state.tsLocked;
     // the Storytellers' line keeps your mic going for the other Storyteller; everyone
     // else goes by your chat / Town Square toggles, which they are told about below
     this.state.micOn = on;
@@ -1522,6 +1529,9 @@ class VoiceChat {
     this._micKey = "";
     this.state.roomMicOn = true;
     this.state.tsMicOn = true;
+    this.state.tsSelfMuted = false;
+    this.state.tsLocked = false;
+    this.state.roomLocked = false;
     this.state.roomMutedIds = [];
     this.state.micLocked = false;
     this.state.incoming = [];

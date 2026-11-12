@@ -13,6 +13,7 @@
           'vote-lock': voteLocked,
           speaking,
           'muted-talking': isYou && voice.mutedTalking,
+          'token-clickable': tokenClickable,
           'hand-up': handUp,
           'has-mic': showMic,
           'out-of-room': outOfRoom,
@@ -64,9 +65,18 @@
         />
       </template>
       <div class="speaking-ring"></div>
-      <div class="hand-raised" v-if="handUp" title="Hand raised">
-        <font-awesome-icon icon="hand-paper" />
-      </div>
+      <!-- on your own seat it's there (hidden) with your hand down too, so hovering
+           your portrait previews raising it -->
+      <transition name="hand-lower">
+        <div
+          class="hand-raised"
+          v-if="handUp || canRaiseHand"
+          :class="{ preview: !handUp }"
+          :title="handUp ? 'Hand raised' : ''"
+        >
+          <font-awesome-icon icon="hand-paper" />
+        </div>
+      </transition>
 
       <!-- Overlay icons -->
       <div class="overlay">
@@ -148,12 +158,12 @@
         class="mic-toggle"
         v-if="showMic"
         :class="{ muted: isMuted, locked: micLocked && isYou, readonly: !isYou }"
-        :title="micTitle"
         @click.stop="isYou && toggleMic()"
       >
         <font-awesome-icon
           :icon="isMuted ? 'microphone-slash' : 'microphone'"
         />
+        <div class="tip">{{ micTitle }}</div>
       </div>
 
       <!-- Menu for another player's character circle (players only) -->
@@ -482,6 +492,17 @@ export default {
     },
     canJoin: function() {
       return this.chatTarget && !this.myChat && !!this.theirChat;
+    },
+    // a seat's portrait that opens a menu brightens on hover, like the
+    // Storyteller's portrait does: every seat for Storytellers, other seats
+    // with something to offer for players
+    tokenClickable: function() {
+      if (!this.session.isSpectator) return true;
+      return !this.isYou && this.hasTokenMenu;
+    },
+    // clicking your own portrait raises your hand
+    canRaiseHand: function() {
+      return this.isYou && this.session.isSpectator && this.voice.joined;
     },
     hasTokenMenu: function() {
       return (
@@ -1202,6 +1223,14 @@ li.move:not(.from) .player .overlay svg.move {
   color: $townsfolk;
 }
 
+/***** A seat's portrait lightens on hover when clicking it opens a menu *****/
+.player.token-clickable:not(.out-of-room) > .token {
+  cursor: pointer;
+  &:hover {
+    filter: brightness(1.2);
+  }
+}
+
 /***** Player name *****/
 .player > .name {
   right: 10%;
@@ -1232,7 +1261,8 @@ li.move:not(.from) .player .overlay svg.move {
     flex-grow: 1;
   }
 
-  #townsquare:not(.spectator) &:hover,
+  // the name goes red on hover for everyone (players get a menu here too)
+  &:hover,
   &.active {
     color: red;
   }
@@ -1351,6 +1381,49 @@ li.move:not(.from) .player .overlay svg.move {
   height: 80%;
 }
 
+// your own seat: hovering your portrait shows a faint hand, since a click raises it
+.player .hand-raised.preview {
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 200ms ease-in-out, transform 200ms ease-in-out;
+}
+.player.you > .token {
+  cursor: pointer;
+}
+.player.you > .token:hover ~ .hand-raised.preview {
+  opacity: 0.6;
+  transform: scale(1);
+}
+
+// a hand going down shrinks away for everyone: on other seats the hand is removed
+// (this transition), on your own it turns back into the hidden preview (above)
+.hand-lower-leave-active {
+  transition: opacity 200ms ease-in-out, transform 200ms ease-in-out;
+}
+.hand-lower-leave-to {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+// a hand going up pops out for everyone (with "Disable Animations" it just appears)
+.player .hand-raised:not(.preview) {
+  animation: hand-pop 300ms ease-out;
+}
+@keyframes hand-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 // only as tall as its options: must beat ".player > .menu { bottom: ... }" below
 // (and in media.scss), or the menu stretches from top: 20% down to the nameplate
 .player > .menu.token-menu {
@@ -1365,6 +1438,46 @@ li.move:not(.from) .player .overlay svg.move {
 
 /***** Mute toggle, down by the nameplate on the same side as the menu *****/
 .player .mic-toggle {
+  // hover text, styled like a character's ability on its token, above the button
+  .tip {
+    position: absolute;
+    bottom: calc(100% + 16px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 200px;
+    padding: 5px 10px;
+    z-index: 25;
+    font-size: 13px;
+    font-weight: normal;
+    line-height: 1.3;
+    color: white;
+    white-space: normal;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 10px;
+    border: 3px solid black;
+    filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.5));
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 200ms ease-in-out;
+
+    &:before {
+      content: " ";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -10px;
+      margin-top: 2px;
+      width: 0;
+      height: 0;
+      border: 10px solid transparent;
+      border-top-color: black;
+    }
+  }
+  &:hover .tip {
+    opacity: 1;
+  }
+
   position: absolute;
   bottom: -3px;
   left: 110%;

@@ -1,6 +1,16 @@
 <template>
   <Modal v-if="modals.role && availableRoles.length" @close="close">
-    <h3>
+    <!-- players are only noting what someone might be, the Storyteller sets it -->
+    <h3 v-if="session.isSpectator && playerIndex >= 0 && players.length">
+      Keep track of what
+      {{
+        players[playerIndex].id === session.playerId
+          ? "you"
+          : players[playerIndex].name || "this player"
+      }}
+      might be
+    </h3>
+    <h3 v-else>
       Choose a new character for
       {{
         playerIndex >= 0 && players.length

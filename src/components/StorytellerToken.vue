@@ -50,14 +50,14 @@
         class="mic-toggle"
         v-if="showMic"
         :class="{ muted: isMuted, readonly: !isSelf }"
-        :title="
-          isSelf ? (isMuted ? 'Unmute yourself' : 'Mute yourself') : 'Muted'
-        "
         @click.stop="isSelf && toggleMic()"
       >
         <font-awesome-icon
           :icon="isMuted ? 'microphone-slash' : 'microphone'"
         />
+        <div class="tip">
+          {{ isSelf ? (isMuted ? "Unmute yourself" : "Mute yourself") : "Muted" }}
+        </div>
       </div>
     </div>
     <!-- Storytellers, under their own token: mute / unmute every player -->
@@ -569,6 +569,46 @@ export default {
 
   // own mute toggle, to the right of the nameplate
   .mic-toggle {
+    // hover text, styled like a character's ability on its token, above the button
+    .tip {
+      position: absolute;
+      bottom: calc(100% + 16px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      padding: 5px 10px;
+      z-index: 25;
+      font-size: 13px;
+      font-weight: normal;
+      line-height: 1.3;
+      color: white;
+      white-space: normal;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 10px;
+      border: 3px solid black;
+      filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.5));
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 200ms ease-in-out;
+
+      &:before {
+        content: " ";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -10px;
+        margin-top: 2px;
+        width: 0;
+        height: 0;
+        border: 10px solid transparent;
+        border-top-color: black;
+      }
+    }
+    &:hover .tip {
+      opacity: 1;
+    }
+
     position: absolute;
     left: calc(110% + 8px);
     top: 50%;
