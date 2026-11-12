@@ -17,7 +17,7 @@
       @click="toggle(chat)"
     >
       <div class="title">
-        {{ chat.persist ? "Private Room" : "Storyteller Room" }}
+        Private Room
         <small>{{ privateNote(chat) }}</small>
       </div>
       <ul class="members">
@@ -200,7 +200,7 @@ export default {
     privateNote(chat) {
       if (!this.voice.isHost) return "only you can see this";
       if (!this.isMine(chat)) return "hidden from players";
-      if (chat.persist && chat.members.length < 2) {
+      if (chat.members.length < 2) {
         return "add players from their seat menu";
       }
       return this.isHidden(chat, this.me())

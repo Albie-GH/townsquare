@@ -35,6 +35,7 @@
     <VoteHistoryModal />
     <GameStateModal />
     <NotepadModal />
+    <NameModal />
     <SheetsMenu />
     <Gradients />
     <span id="version">v{{ version }}</span>
@@ -59,12 +60,15 @@ import VoteHistoryModal from "@/components/modals/VoteHistoryModal";
 import GameStateModal from "@/components/modals/GameStateModal";
 import voice from "./voice";
 import NotepadModal from "@/components/modals/NotepadModal";
+import NameModal from "@/components/modals/NameModal";
+import { setSoundsMuted } from "./sounds";
 import SheetsMenu from "@/components/SheetsMenu";
 
 export default {
   components: {
     GameStateModal,
     NotepadModal,
+    NameModal,
     SheetsMenu,
     VoteHistoryModal,
     FabledModal,
@@ -87,6 +91,15 @@ export default {
     return {
       version
     };
+  },
+  watch: {
+    // "Mute Sounds" silences every sound effect and all music (never voices)
+    "grimoire.isMuted": {
+      immediate: true,
+      handler(muted) {
+        setSoundsMuted(muted);
+      }
+    }
   },
   // Hotkeys listen on the whole page, so they keep working whatever has focus
   // (e.g. after the notepad closes and its text box disappears)

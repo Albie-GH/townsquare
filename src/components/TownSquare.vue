@@ -12,6 +12,7 @@
   >
     <PhaseBar v-if="session.sessionId"></PhaseBar>
     <ChatRooms v-if="session.sessionId"></ChatRooms>
+    <Spectators v-if="session.sessionId"></Spectators>
     <ChatPrompts v-if="session.sessionId"></ChatPrompts>
     <StorytellerToken v-if="session.sessionId"></StorytellerToken>
     <!-- the co-Storyteller sits to the right of the Storyteller -->
@@ -107,6 +108,7 @@ import StorytellerToken from "./StorytellerToken";
 import voice from "../voice";
 import PhaseBar from "./PhaseBar";
 import ChatRooms from "./ChatRooms";
+import Spectators from "./Spectators";
 import ChatPrompts from "./ChatPrompts";
 
 export default {
@@ -114,6 +116,7 @@ export default {
     StorytellerToken,
     PhaseBar,
     ChatRooms,
+    Spectators,
     ChatPrompts,
     Player,
     Token,
@@ -159,7 +162,7 @@ export default {
         this[method](playerIndex, params);
       }
     },
-    claimSeat(playerIndex) {
+    async claimSeat(playerIndex) {
       if (!this.session.isSpectator) return;
       const player = this.players[playerIndex];
       if (this.session.playerId === player.id) {
@@ -168,9 +171,11 @@ export default {
       } else {
         let name = "";
         if (!player.name) {
-          // empty seat: ask who is sitting here
-          name = (prompt("What's your name?") || "").trim().slice(0, 30);
-          if (!name) return; // cancelled, so don't claim
+          // empty seat: it takes your player name (asked when you joined voice,
+          // or now if you never have)
+          const own = voice.state.myName || (await voice.askName());
+          name = (own || "").trim().slice(0, 30);
+          if (!name || name === "Player") return; // no name given, so don't claim
         }
         this.$store.commit("session/setClaimName", name);
         this.$store.commit("session/claimSeat", playerIndex);

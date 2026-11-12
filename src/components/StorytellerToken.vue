@@ -298,7 +298,7 @@ export default {
     },
     requestCohost() {
       this.isTokenMenuOpen = false;
-      const name = prompt("Your name as co-Storyteller", "");
+      const name = prompt("Your name as co-Storyteller", this.voice.myName || "");
       if (name === null) return;
       voice.requestCohost(name);
     },

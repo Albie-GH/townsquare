@@ -1,5 +1,12 @@
 import Vue from "vue";
-import { playSound, startMusic, stopMusic } from "./sounds";
+import {
+  playSound,
+  startMusic,
+  stopMusic,
+  startNominationMusic,
+  startNightMusic
+} from "./sounds";
+import { askPlayerName } from "./namePrompt";
 
 const ICE = {
   iceServers: [
@@ -19,6 +26,7 @@ const MUTED_TALK_LEVEL = 12;
 const VOLUME_KEY = "botcVoiceVolumes";
 const HOST_NAME_KEY = "botcStorytellerName";
 const DEFAULT_HOST_NAME = "Storyteller"; // means "no custom name set"
+const VOICE_NAME_KEY = "botcVoiceName"; // the name players join voice with
 
 function loadHostName() {
   try {
@@ -87,6 +95,7 @@ class VoiceChat {
       volumes: loadVolumes(), // playerId -> 0-100, how loud you hear each player
       hostPlayerId: "", // playerId of the storyteller in the voice room, if known
       hostName: loadHostName(), // the Storyteller's chosen name ("Storyteller" = none)
+      myName: "", // the name you joined voice with (players)
       isHost: false, // this client is a Storyteller (the Storyteller or the co-Storyteller)
       isCoHost: false, // this client is the co-Storyteller
       cohostPlayerId: "", // playerId of the co-Storyteller, if there is one
@@ -136,6 +145,7 @@ class VoiceChat {
     this._prevChat = null; // { id, members } of your own chat, to hear people come and go
     this._bellTimer = null; // rings the bell 5 seconds before the chat timer ends
     this._serverPhase = ""; // last phase the server told us about, to ring the bell on day
+    this._nightMusicTimer = null; // starts the night music 5 seconds into the night
     this.onBluffs = null; // set by socket.js, stores the bluffs you were sent
     this.onGrimoire = null; // set by socket.js, shows the Grimoire you were sent
     this.onCohost = null; // set by socket.js, you became (true) or stopped being (false) the co-Storyteller
@@ -173,6 +183,7 @@ class VoiceChat {
     this.state.hostPlayerId = isHost ? this._playerId : "";
     this._joinedAsHost = !!isHost;
     if (isHost) name = this.state.hostName;
+    this.state.myName = name;
     this.state.isHost = !!isHost;
     this.state.allMuted = false;
     const gen = this._gen;
@@ -247,6 +258,29 @@ class VoiceChat {
   leave() {
     this._teardown("");
   }
+
+  // Players: the name to join voice with (a promise). Asks the first time, in the
+  // "Enter player name" modal, then remembers it in this browser.
+  async askName(force = false) {
+    let saved = "";
+    try {
+      saved = localStorage.getItem(VOICE_NAME_KEY) || "";
+    } catch (e) {
+      // storage unavailable
+    }
+    if (saved && !force) return saved;
+    const typed = await askPlayerName(saved);
+    const name = String(typed === null ? saved : typed).trim().slice(0, 30);
+    if (!name) return saved || "Player";
+    try {
+      localStorage.setItem(VOICE_NAME_KEY, name);
+    } catch (e) {
+      // storage unavailable, you'll be asked again next time
+    }
+    return name;
+  }
+
+
 
   // Your mic where you are right now: in your private chat if you are in one, else the Town Square
   // The mute button / [M]: your mic where you are. While the Storyteller has you muted
@@ -678,7 +712,13 @@ class VoiceChat {
     this._send({ type: "st-dead", on: !!on });
   }
 
-  // Storytellers: stop the wake-up music for everyone
+  // Storytellers: start the nomination music for everyone (dusk only)
+  startNominationMusicAll() {
+    if (!this.state.isHost || this.state.phase !== "dusk") return;
+    this._send({ type: "music-start", track: "nomination" });
+  }
+
+  // Storytellers: stop the music for everyone
   stopMusicAll() {
     if (!this.state.isHost) return;
     stopMusic();
@@ -786,6 +826,13 @@ class VoiceChat {
   // Storyteller only: day, dusk or night. Ends the chat timer and any private chats.
   setPhase(phase) {
     if (!this.state.isHost || !["day", "dusk", "night", "end"].includes(phase)) return;
+    if (phase === this.state.phase) return; // already there, nothing to tell anyone
+    // dusk during the chat timer: the server rings the bell and closes the rooms
+    // 5 seconds later, so the phase changes when it says so
+    if (phase === "dusk" && this.state.phase === "day" && this.state.timerActive) {
+      this._send({ type: "phase", phase });
+      return;
+    }
     this.state.phase = phase;
     if (this.state.timerActive) this._setTimer(0);
     this._send({ type: "phase", phase });
@@ -943,14 +990,31 @@ class VoiceChat {
       // the bell rings for everyone when day breaks and when night falls;
       // daybreak also starts the wake-up music, which stops when someone dies
       const changed = !!this._serverPhase && this._serverPhase !== msg.phase;
-      const bell = msg.phase === "day" || msg.phase === "night";
+      // dusk rings too when a Storyteller picks it (the chat timer running out already
+      // rang its bell 5 seconds before)
+      const bell =
+        msg.phase === "day" ||
+        msg.phase === "night" ||
+        (msg.phase === "dusk" && msg.reason !== "timer");
       if (bell && changed) playSound("bell");
+      // only a real change cancels the night music countdown (the same phase can
+      // arrive twice, e.g. the phase bar and the grimoire's night switch both send it)
+      if (changed) clearTimeout(this._nightMusicTimer);
       if (changed && msg.phase === "day") startMusic();
       else if (changed) stopMusic();
+      // night: the music starts 5 seconds in, as everyone is muted
+      if (changed && msg.phase === "night") {
+        this._nightMusicTimer = setTimeout(() => {
+          if (this.state.phase === "night") startNightMusic();
+        }, 5000);
+      }
       this._serverPhase = msg.phase;
       this.state.phase = msg.phase;
       this._setTimer(0);
     } else if (msg.type === "timer") {
+      // closing: a Storyteller called dusk early, the bell rings now (as it would
+      // 5 seconds before the timer runs out)
+      if (msg.closing) playSound("bell");
       this._setTimer(msg.left || 0);
     } else if (msg.type === "bluffs") {
       if (this.onBluffs) this.onBluffs(msg.roles || []);
@@ -964,6 +1028,8 @@ class VoiceChat {
       // the Storytellers died: everyone hears it (and the wake-up music stops)
       if (msg.on && !this.state.stDead) playSound("death");
       this.state.stDead = !!msg.on;
+    } else if (msg.type === "music-start") {
+      if (msg.track === "nomination") startNominationMusic();
     } else if (msg.type === "music-stop") {
       stopMusic();
     } else if (msg.type === "st-urgent") {
@@ -1475,6 +1541,7 @@ class VoiceChat {
     this.state.lineAutoIds = [];
     this.state.urgent = false;
     this.state.stDead = false;
+    clearTimeout(this._nightMusicTimer);
     stopMusic();
     this._trackOn = true;
     this._joinedAsHost = false;

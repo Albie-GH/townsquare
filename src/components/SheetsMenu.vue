@@ -94,8 +94,7 @@ export default {
     roomName() {
       const chat = this.myChat;
       if (!chat) return "";
-      if (chat.persist) return "Private Room";
-      if (chat.whisper) return "Storyteller Room";
+      if (chat.whisper) return "Private Room";
       return `Room ${chat.num}`;
     },
     // Storytellers: whether the other Storyteller hears you over your line

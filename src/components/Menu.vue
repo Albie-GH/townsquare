@@ -111,7 +111,14 @@
                 :icon="['fas', grimoire.isMuted ? 'volume-mute' : 'volume-up']"
             /></em>
           </li>
-          <!-- how loud the sound effects, music and vote countdown are for you -->
+          <li @click="toggleNightMusic">
+            Mute Night Music
+            <em
+              ><font-awesome-icon
+                :icon="['fas', musicPrefs.nightMuted ? 'volume-mute' : 'volume-up']"
+            /></em>
+          </li>
+          <!-- how loud the sound effects (and vote countdown) and the music are for you -->
           <li class="gate sfx">
             SFX Volume
             <input
@@ -121,9 +128,22 @@
               step="5"
               :value="sfx.volume"
               @input="setSfx"
-              title="Sound effects and music volume"
+              title="Sound effects and the vote countdown"
             />
             <em>{{ sfx.volume }}%</em>
+          </li>
+          <li class="gate music">
+            Music Volume
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              :value="musicVolume.volume"
+              @input="setMusic"
+              title="Wake-up and nomination music"
+            />
+            <em>{{ musicVolume.volume }}%</em>
           </li>
         </template>
 
@@ -308,7 +328,14 @@
 <script>
 import { mapMutations, mapState } from "vuex";
 import voice from "../voice";
-import { sfx, setSfxVolume } from "../sounds";
+import {
+  sfx,
+  setSfxVolume,
+  musicVolume,
+  setMusicVolume,
+  musicPrefs,
+  setNightMusicMuted
+} from "../sounds";
 
 export default {
   computed: {
@@ -319,12 +346,20 @@ export default {
     return {
       tab: "grimoire",
       sfx,
+      musicVolume,
+      musicPrefs,
       voice: voice.state
     };
   },
   methods: {
     setSfx(event) {
       setSfxVolume(parseInt(event.target.value, 10));
+    },
+    setMusic(event) {
+      setMusicVolume(parseInt(event.target.value, 10));
+    },
+    toggleNightMusic() {
+      setNightMusicMuted(!this.musicPrefs.nightMuted);
     },
     setBackground() {
       const background = prompt("Enter custom background URL");
@@ -397,15 +432,10 @@ export default {
       const seat = this.players.find(p => p.id && p.id === peer.playerId);
       return seat && seat.name ? seat.name : peer.name;
     },
-    joinVoice() {
+    async joinVoice() {
       if (!this.session.sessionId) return;
-      const seat = this.players.find(
-        p => p.id && p.id === this.session.playerId
-      );
-      const name = seat
-        ? seat.name
-        : this.session.isSpectator
-        ? "Player"
+      const name = this.session.isSpectator
+        ? await voice.askName()
         : "Storyteller";
       voice.join(
         this.session.sessionId,

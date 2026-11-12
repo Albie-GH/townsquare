@@ -168,6 +168,19 @@ function endChats(room, game) {
   game.chats = game.chats.filter(c => c.whisper);
   broadcastChats(room);
 }
+// (re)starts the chat timer; when it runs out the rooms close and it becomes dusk
+function armChatTimer(room, game, ms) {
+  clearTimeout(game.timer);
+  game.timerEnd = Date.now() + ms;
+  game.timer = setTimeout(() => {
+    const g = games.get(room);
+    if (!g) return;
+    g.timer = null;
+    g.timerEnd = 0;
+    setPhase(room, g, "dusk", "timer");
+  }, ms);
+}
+const CLOSING_MS = 5000; // the bell rings this long before the rooms close
 function stopTimer(room, game) {
   clearTimeout(game.timer);
   game.timer = null;
@@ -306,8 +319,18 @@ wss.on("connection", ws => {
     if (msg.type === "phase" && room) {
       const members = rooms.get(room);
       const me = members && members.get(id);
-      if (me && isSt(getGame(room), me) && ["day", "dusk", "night", "end"].includes(msg.phase)) {
-        setPhase(room, getGame(room), msg.phase);
+      const game = getGame(room);
+      if (me && isSt(game, me) && ["day", "dusk", "night", "end"].includes(msg.phase)) {
+        // dusk while the chat timer runs: close the rooms the same way the timer
+        // does (the bell, 5 seconds, then everyone back to town and dusk)
+        if (msg.phase === "dusk" && game.phase === "day" && game.timerEnd) {
+          if (timerLeft(game) > CLOSING_MS) {
+            armChatTimer(room, game, CLOSING_MS);
+            broadcast(room, { type: "timer", left: CLOSING_MS, closing: true });
+          }
+          return; // already in its last 5 seconds: it gets there on its own
+        }
+        setPhase(room, game, msg.phase);
       }
     }
 
@@ -318,15 +341,7 @@ wss.on("connection", ws => {
       if (me && isSt(game, me) && game.phase === "day") {
         const ms = Math.max(5000, Math.min(MAX_TIMER_MS, Math.round(Number(msg.seconds) * 1000) || 0));
         if (game.timerEnd) stopTimer(room, game);
-        game.timerEnd = Date.now() + ms;
-        const roomName = room;
-        game.timer = setTimeout(() => {
-          const g = games.get(roomName);
-          if (!g) return;
-          g.timer = null;
-          g.timerEnd = 0;
-          setPhase(roomName, g, "dusk", "timer");
-        }, ms);
+        armChatTimer(room, game, ms);
         broadcast(room, { type: "timer", left: ms });
       }
     }
@@ -448,7 +463,8 @@ wss.on("connection", ws => {
           current.members.push(req.from);
           joined = [req.from];
         } else if (req.type === "st") {
-          game.chats.push({ id: ++game.seq, num: 0, members: [req.to, req.from], hidden: [], whisper: true, forced: [] });
+          // a player asked a Storyteller for a chat: a Private Room with the two of them
+          game.chats.push({ id: ++game.seq, num: 0, members: [req.to, req.from], hidden: [], whisper: true, forced: [], muted: [], persist: true });
           joined = [req.from, req.to];
         } else {
           game.chats.push({ id: ++game.seq, num: lowestFreeNum(game), members: [req.from, req.to], hidden: [], whisper: false });
@@ -577,7 +593,8 @@ wss.on("connection", ws => {
       const theirs = chatOf(game, to);
       if (theirs && theirs !== chat) leaveChat(room, game, to);
       if (!chat) {
-        chat = { id: ++game.seq, num: 0, members: [me.playerId], hidden: [], whisper: true, forced: [] };
+        // every private Storyteller chat is a Private Room (it stays open with just a Storyteller)
+        chat = { id: ++game.seq, num: 0, members: [me.playerId], hidden: [], whisper: true, forced: [], muted: [], persist: true };
         game.chats.push(chat);
       }
       // a chat the Storyteller opens cannot be left by the player
@@ -644,6 +661,15 @@ wss.on("connection", ws => {
       if (!isSt(game, me)) return;
       game.stDead = !!msg.on;
       broadcast(room, { type: "st-dead", on: game.stDead });
+    }
+
+    if (msg.type === "music-start" && room) {
+      // a Storyteller starts the nomination music for everyone (at dusk)
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      const game = getGame(room);
+      if (!isSt(game, me) || game.phase !== "dusk") return;
+      broadcast(room, { type: "music-start", track: "nomination" });
     }
 
     if (msg.type === "music-stop" && room) {
@@ -737,8 +763,10 @@ wss.on("connection", ws => {
       const members = rooms.get(room);
       const me = members && members.get(id);
       const game = getGame(room);
-      if (me && isSt(game, me)) {
-        me.name = String(msg.name || "Storyteller").slice(0, 30);
+      if (me) {
+        // Storytellers rename their token, players set the name others see them by
+        const st = isSt(game, me);
+        me.name = String(msg.name || "").trim().slice(0, 30) || (st ? "Storyteller" : "Player");
         if (me.playerId === game.cohost) game.cohostName = me.name;
         for (const [pid, p] of members) {
           if (pid !== id) p.ws.send(JSON.stringify({ type: "peer-renamed", id, name: me.name }));

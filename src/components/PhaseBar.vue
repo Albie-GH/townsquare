@@ -40,10 +40,23 @@
         >
           <font-awesome-icon icon="clock" />Start chat timer
         </li>
-        <template v-if="music.playing">
+        <template v-if="music.playing || voice.phase === 'dusk'">
           <li class="headline">Music</li>
-          <li @click="stopMusic">
-            <font-awesome-icon icon="volume-mute" />Stop wake-up music
+          <li
+            v-if="voice.phase === 'dusk' && music.track !== 'nomination'"
+            @click="startNominationMusic"
+            :class="{ disabled: !voice.joined }"
+          >
+            <font-awesome-icon icon="volume-up" />Start Nomination Music
+          </li>
+          <li v-if="music.playing" @click="stopMusic">
+            <font-awesome-icon icon="volume-mute" />{{
+              music.track === "nomination"
+                ? "Stop nomination music"
+                : music.track === "night"
+                ? "Stop night music"
+                : "Stop wake-up music"
+            }}
           </li>
         </template>
       </ul>
@@ -127,7 +140,13 @@ export default {
         if (night) this.$store.commit("session/setMarkedPlayer", -1);
       }
     },
-    // stops the wake-up music for everyone
+    // fades in the nomination music for everyone, repeating every 2 minutes
+    startNominationMusic() {
+      if (!this.voice.joined) return;
+      this.isMenuOpen = false;
+      voice.startNominationMusicAll();
+    },
+    // stops the music for everyone
     stopMusic() {
       this.isMenuOpen = false;
       voice.stopMusicAll();

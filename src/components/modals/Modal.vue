@@ -1,6 +1,6 @@
 <template>
   <transition name="modal-fade">
-    <div class="modal-backdrop" @click="close">
+    <div class="modal-backdrop" @click="closable && close()">
       <div
         class="modal"
         :class="{ maximized: isMaximized }"
@@ -9,7 +9,7 @@
         aria-describedby="modalDescription"
         @click.stop=""
       >
-        <div class="top-right-buttons">
+        <div class="top-right-buttons" v-if="closable">
           <font-awesome-icon
             @click="isMaximized = !isMaximized"
             class="top-right-button"
@@ -31,6 +31,14 @@
 
 <script>
 export default {
+  props: {
+    // false: no window / close buttons and clicking outside does nothing,
+    // so the modal has to be answered
+    closable: {
+      type: Boolean,
+      default: true
+    }
+  },
   data: function() {
     return {
       isMaximized: false

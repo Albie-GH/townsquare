@@ -1130,15 +1130,13 @@ export default store => {
   };
 
   // Voice starts automatically with the live session
-  const joinVoice = ({
+  const joinVoice = async ({
     session: { sessionId, isSpectator, isCoHost, playerId }
   }) => {
-    voice.join(
-      sessionId,
-      isSpectator ? "Player" : "Storyteller",
-      playerId,
-      !isSpectator && !isCoHost
-    );
+    const name = isSpectator ? await voice.askName() : "Storyteller";
+    // the session may have changed while the name was being typed
+    if (store.state.session.sessionId !== sessionId) return;
+    voice.join(sessionId, name, playerId, !isSpectator && !isCoHost);
   };
   // the constructor reconnects to a stored session without a mutation
   if (store.state.session.sessionId) joinVoice(store.state);
