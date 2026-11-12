@@ -217,6 +217,9 @@ class LiveSession {
       case "pronouns":
         this._updatePlayerPronouns(params);
         break;
+      case "playerName":
+        this._updateOwnName(params);
+        break;
     }
   }
 
@@ -275,6 +278,7 @@ class LiveSession {
       isDead: player.isDead,
       isVoteless: player.isVoteless,
       pronouns: player.pronouns,
+      nameLocked: !!player.nameLocked,
       revealed: player.revealed || "",
       ...(player.role && player.role.team === "traveler"
         ? { roleId: player.role.id }
@@ -340,8 +344,8 @@ class LiveSession {
       const player = players[x];
       const { roleId } = state;
       // update relevant properties
-      ["name", "id", "isDead", "isVoteless", "pronouns", "revealed"].forEach(property => {
-        const value = state[property];
+      ["name", "id", "isDead", "isVoteless", "pronouns", "revealed", "nameLocked"].forEach(property => {
+        const value = property === "nameLocked" ? !!state[property] : state[property];
         if (player[property] !== value) {
           this._store.commit("players/update", { player, property, value });
         }
@@ -539,6 +543,32 @@ class LiveSession {
       return;
     const index = this._store.state.players.players.indexOf(player);
     this._send("pronouns", [index, value]);
+  }
+
+  /**
+   * A seated player renames themselves: the Storyteller applies it to their seat
+   * (which then goes out to everyone as a normal player update).
+   * @param name
+   */
+  sendOwnName(name) {
+    if (!this._isSpectator || this._coHost) return;
+    const playerId = this._store.state.session.playerId;
+    const index = this._store.state.players.players.findIndex(p => p.id === playerId);
+    if (index < 0) return;
+    this._send("playerName", [index, playerId, name]);
+  }
+
+  /**
+   * Storyteller: a player renamed themselves (only their own seat counts)
+   * @private
+   */
+  _updateOwnName([index, playerId, name]) {
+    if (this._isSpectator) return;
+    const player = this._store.state.players.players[index];
+    const clean = typeof name === "string" ? name.trim().slice(0, 30) : "";
+    if (!player || !playerId || player.id !== playerId || !clean) return;
+    if (player.nameLocked) return; // the Storyteller locked their name
+    this._store.commit("players/update", { player, property: "name", value: clean });
   }
 
   /**
@@ -989,6 +1019,7 @@ export default store => {
         isDead: !!p.isDead,
         isVoteless: !!p.isVoteless,
         pronouns: p.pronouns || "",
+        nameLocked: !!p.nameLocked,
         revealed: p.revealed || ""
       })),
       bluffs: bluffs.map(roleRef),
@@ -1040,7 +1071,7 @@ export default store => {
       const player = players[index];
       const update = (property, value) =>
         store.commit("players/update", { player, property, value });
-      ["name", "id", "isDead", "isVoteless", "pronouns", "revealed"].forEach(
+      ["name", "id", "isDead", "isVoteless", "pronouns", "revealed", "nameLocked"].forEach(
         property => {
           if ((player[property] || "") !== (sent[property] || "")) {
             update(property, sent[property]);
@@ -1173,6 +1204,9 @@ export default store => {
         break;
       case "session/claimSeat":
         session.claimSeat(payload);
+        break;
+      case "session/renameSelf":
+        session.sendOwnName(payload);
         break;
       case "session/distributeRoles":
         if (payload) {

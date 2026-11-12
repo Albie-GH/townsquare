@@ -55,6 +55,8 @@ const mutations = {
   setVoteHistoryAllowed: set("isVoteHistoryAllowed"),
   claimSeat: set("claimedSeat"),
   setClaimName: set("claimName"),
+  // a seated player renames themselves (sent to the Storyteller, see socket.js)
+  renameSelf() {},
   distributeRoles: set("isRolesDistributed"),
   setSessionId(state, sessionId) {
     state.sessionId = sessionId

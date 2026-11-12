@@ -65,6 +65,7 @@
         />
       </template>
       <div class="speaking-ring"></div>
+      <div class="speaking-ring muted-ring"></div>
       <!-- on your own seat it's there (hidden) with your hand down too, so hovering
            your portrait previews raising it -->
       <transition name="hand-lower">
@@ -181,11 +182,11 @@
             </li>
             <li @click="startWhisper" v-if="canWhisper">
               <font-awesome-icon icon="comments" />{{
-                myPrivateRoom ? "Add to private room" : "Private chat"
+                myPrivateRoom ? "Add to Storyteller Room" : "Private chat"
               }}
             </li>
             <li @click="removeFromRoom" v-if="canRemoveFromRoom">
-              <font-awesome-icon icon="sign-out-alt" />Remove from private room
+              <font-awesome-icon icon="sign-out-alt" />Remove from Storyteller Room
             </li>
             <li @click="lowerHand" v-if="handUp">
               <font-awesome-icon icon="hand-paper" />Lower hand
@@ -239,9 +240,24 @@
           >
             <font-awesome-icon icon="venus-mars" />Change Pronouns
           </li>
+          <!-- players can rename themselves, unless the Storyteller locked it -->
+          <li
+            @click="changeOwnName"
+            v-if="
+              session.isSpectator &&
+                player.id === session.playerId &&
+                !player.nameLocked
+            "
+          >
+            <font-awesome-icon icon="user-edit" />Change Name
+          </li>
           <template v-if="!session.isSpectator">
             <li @click="changeName">
               <font-awesome-icon icon="user-edit" />Rename
+            </li>
+            <li @click="updatePlayer('nameLocked', !player.nameLocked, true)">
+              <font-awesome-icon :icon="player.nameLocked ? 'lock-open' : 'lock'" />
+              {{ player.nameLocked ? "Unlock name" : "Lock name" }}
             </li>
             <li @click="movePlayer()" :class="{ disabled: session.lockedVote }">
               <font-awesome-icon icon="redo-alt" />
@@ -618,6 +634,10 @@ export default {
         this.player.isDead &&
         (!this.grimoire.isPublic || this.player.isVoteless);
       if (revives && !this.confirmRevive()) return;
+      // a death clears their mark for execution
+      if (!this.player.isDead && this.session.markedPlayer === this.index) {
+        this.$store.commit("session/setMarkedPlayer", -1);
+      }
       if (this.grimoire.isPublic) {
         if (!this.player.isDead) {
           this.updatePlayer("isDead", true);
@@ -644,6 +664,15 @@ export default {
       if (this.session.isSpectator) return;
       const name = prompt("Player name", this.player.name) || this.player.name;
       this.updatePlayer("name", name, true);
+    },
+    changeOwnName() {
+      this.isMenuOpen = false;
+      if (this.player.nameLocked) return;
+      const name = prompt("Your name", this.player.name);
+      if (name === null || !name.trim()) return;
+      // the Storyteller applies it to your seat; your voice name follows
+      this.$store.commit("session/renameSelf", name.trim().slice(0, 30));
+      voice.setMyName(name);
     },
     removeReminder(reminder) {
       const reminders = [...this.player.reminders];
@@ -1331,7 +1360,8 @@ li.move:not(.from) .player .overlay svg.move {
 }
 
 /***** Talking ring *****/
-.player .speaking-ring {
+.player .speaking-ring,
+.player .muted-ring {
   position: absolute;
   top: -4px;
   left: -4px;
@@ -1346,14 +1376,17 @@ li.move:not(.from) .player .overlay svg.move {
   transition: opacity 120ms;
   z-index: 1;
 }
-.player.speaking .speaking-ring {
+.player.speaking .speaking-ring:not(.muted-ring) {
   opacity: 1;
 }
 // only on your own seat: you're talking, but you're muted so nobody hears it
-.player.muted-talking .speaking-ring {
-  opacity: 1;
+// its own ring, so it fades out red (rather than turning green as it goes)
+.player .muted-ring {
   border-color: #ff4d4d;
   box-shadow: 0 0 12px 3px rgba(255, 77, 77, 0.7);
+}
+.player.muted-talking .muted-ring {
+  opacity: 1;
 }
 
 /***** Raised hand *****/

@@ -37,6 +37,8 @@ const faIcons = [
   "Heartbeat",
   "Image",
   "Link",
+  "Lock",
+  "LockOpen",
   "Microphone",
   "MicrophoneSlash",
   "MinusCircle",

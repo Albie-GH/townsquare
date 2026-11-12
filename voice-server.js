@@ -664,16 +664,16 @@ wss.on("connection", ws => {
     }
 
     if (msg.type === "music-start" && room) {
-      // a Storyteller starts the nomination music for everyone (at dusk)
+      // a Storyteller starts one of the music tracks for everyone, in any phase
       const members = rooms.get(room);
       const me = members && members.get(id);
-      const game = getGame(room);
-      if (!isSt(game, me) || game.phase !== "dusk") return;
-      broadcast(room, { type: "music-start", track: "nomination" });
+      if (!isSt(getGame(room), me)) return;
+      if (!["wake", "nomination", "night"].includes(msg.track)) return;
+      broadcast(room, { type: "music-start", track: msg.track });
     }
 
     if (msg.type === "music-stop" && room) {
-      // a Storyteller stops the wake-up music for everyone
+      // a Storyteller stops the music for everyone
       const members = rooms.get(room);
       const me = members && members.get(id);
       if (!isSt(getGame(room), me)) return;

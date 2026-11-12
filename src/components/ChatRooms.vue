@@ -6,25 +6,27 @@
     <h4>Private chats</h4>
     <!-- Storytellers: a hidden room to bring players into, e.g. one by one at night -->
     <div class="room new-room" v-if="canOpenPrivate" @click="openPrivate">
-      <font-awesome-icon icon="plus-circle" /> Private room
+      <font-awesome-icon icon="plus-circle" /> Storyteller Room
     </div>
     <!-- private Storyteller chats: only the people in them (and Storytellers) see these -->
     <div
       class="room st-room"
       v-for="chat in privateRooms"
       :key="chat.id"
-      :class="{ mine: isActive(chat), open: openId === chat.id }"
-      @click="toggle(chat)"
+      :class="{ mine: isActive(chat) }"
     >
       <div class="title">
-        Private Room
+        Storyteller Room
         <small>{{ privateNote(chat) }}</small>
       </div>
       <ul class="members">
         <li
           v-for="id in chat.members"
           :key="id"
-          :class="{ speaking: voice.speakingIds.includes(id) }"
+          :class="{
+            speaking: voice.speakingIds.includes(id),
+            unseen: isHidden(chat, id)
+          }"
         >
           <span class="name">{{ nameOf(id) }}</span>
           <em v-if="isHidden(chat, id)">(unseen)</em>
@@ -68,7 +70,7 @@
         </span>
       </div>
       <!-- Storytellers can step into any private chat -->
-      <div class="action" v-else-if="voice.isHost && openId === chat.id">
+      <div class="action" v-else-if="voice.isHost">
         <span @click.stop="joinAs(chat, false)">
           <font-awesome-icon icon="comments" /> Join
         </span>
@@ -81,18 +83,19 @@
       class="room"
       v-for="chat in rooms"
       :key="chat.id"
-      :class="{ mine: isActive(chat), open: openId === chat.id }"
-      @click="toggle(chat)"
+      :class="{ mine: isActive(chat) }"
     >
       <div class="title">
         Room {{ chat.num }}
-        <small v-if="isMine(chat)">{{ roomNote(chat) }}</small>
       </div>
       <ul class="members">
         <li
           v-for="id in shown(chat)"
           :key="id"
-          :class="{ speaking: voice.speakingIds.includes(id) }"
+          :class="{
+            speaking: voice.speakingIds.includes(id),
+            unseen: isHidden(chat, id)
+          }"
         >
           <span class="name">{{ nameOf(id) }}</span>
           <em v-if="isHidden(chat, id)">(unseen)</em>
@@ -117,7 +120,8 @@
           />
         </li>
       </ul>
-      <div class="action" v-if="isMine(chat) || openId === chat.id">
+      <!-- every option shows straight away, nothing to open -->
+      <div class="action" v-if="isMine(chat) || voice.isHost || canJoin">
         <template v-if="isMine(chat)">
           <!-- Storyteller: show yourself to the room, or slip out of view -->
           <span v-if="voice.isHost" @click.stop="setHidden(!isHidden(chat, me()))">
@@ -151,9 +155,6 @@ import chatNames from "./chatNames";
 
 export default {
   mixins: [chatNames],
-  data() {
-    return { openId: 0 };
-  },
   computed: {
     // private Storyteller chats are only listed for the people in them
     rooms() {
@@ -203,14 +204,7 @@ export default {
       if (chat.members.length < 2) {
         return "add players from their seat menu";
       }
-      return this.isHidden(chat, this.me())
-        ? "you're here unseen"
-        : "hidden from other players";
-    },
-    roomNote(chat) {
-      return this.isHidden(chat, this.me())
-        ? "you're here unseen"
-        : "you're in this room";
+      return "hidden from other players";
     },
     // private chat mutes are separate from the Town Square ones
     roomMuted(chat, id) {
@@ -254,27 +248,19 @@ export default {
     openPrivate() {
       voice.openPrivateRoom();
     },
-    toggle(chat) {
-      this.openId = this.openId === chat.id ? 0 : chat.id;
-    },
     endStRoom() {
-      this.openId = 0;
       voice.endWhisper();
     },
     leave() {
-      this.openId = 0;
       voice.leaveChat();
     },
     join(chat) {
-      this.openId = 0;
       voice.requestJoin(chat.id);
     },
     setHidden(hidden) {
-      this.openId = 0;
       voice.setHidden(hidden);
     },
     joinAs(chat, hidden) {
-      this.openId = 0;
       voice.joinChat(chat.id, hidden);
     }
   }
@@ -306,12 +292,8 @@ export default {
     border: 3px solid black;
     border-radius: 10px;
     box-shadow: 0 0 5px black;
-    cursor: pointer;
 
-    &:hover,
-    &.open {
-      color: #ff6b6b;
-    }
+
     &.mine {
       border-color: #3ddc84;
       box-shadow: 0 0 8px #3ddc84;
@@ -320,6 +302,10 @@ export default {
       text-align: center;
       font-size: 90%;
       opacity: 0.85;
+      cursor: pointer;
+      &:hover {
+        color: #ff6b6b;
+      }
     }
 
     .title {
@@ -352,6 +338,10 @@ export default {
           opacity: 0.6;
           font-size: 85%;
         }
+        // a Storyteller here invisibly: their name greyed out
+        &.unseen:not(.speaking) .name {
+          opacity: 0.6; // the same grey as "(unseen)"
+        }
         .mic {
           flex-shrink: 0;
           width: 12px;
@@ -378,6 +368,7 @@ export default {
           flex-shrink: 0;
           width: 10px;
           margin-left: 4px;
+          color: white; // not the speaking green of the row
           opacity: 0.6;
           cursor: pointer;
           &:hover {
@@ -403,6 +394,7 @@ export default {
       color: white;
       span {
         display: block;
+        cursor: pointer; // even in a room box that isn't clickable itself
       }
       span:hover {
         color: red;

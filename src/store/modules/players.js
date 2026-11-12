@@ -8,6 +8,7 @@ const NEWPLAYER = {
   isVoteless: false,
   isDead: false,
   pronouns: "",
+  nameLocked: false, // the Storyteller stopped this player renaming themselves
   revealed: "" // End of Game: role id the Storyteller has revealed on this seat
 };
 
@@ -83,11 +84,12 @@ const actions = {
         return player;
       });
     } else {
-      players = state.players.map(({ name, id, pronouns }) => ({
+      players = state.players.map(({ name, id, pronouns, nameLocked }) => ({
         ...NEWPLAYER,
         name,
         id,
-        pronouns
+        pronouns,
+        nameLocked: !!nameLocked
       }));
       commit("setFabled", { fabled: [] });
     }

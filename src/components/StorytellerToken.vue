@@ -15,6 +15,7 @@
     >
       <font-awesome-icon icon="theater-masks" />
       <div class="speaking-ring"></div>
+      <div class="speaking-ring muted-ring"></div>
     </div>
     <!-- the dead marker: a Storyteller marks both Storytellers dead at once -->
     <div
@@ -298,8 +299,12 @@ export default {
     },
     requestCohost() {
       this.isTokenMenuOpen = false;
-      const name = prompt("Your name as co-Storyteller", this.voice.myName || "");
-      if (name === null) return;
+      // already named (when joining voice): ask with that name, no prompt
+      let name = this.voice.myName;
+      if (!name) {
+        name = prompt("Your name as co-Storyteller", "");
+        if (name === null) return;
+      }
       voice.requestCohost(name);
     },
     toggleDead() {
@@ -361,12 +366,12 @@ export default {
 .storyteller {
   position: absolute;
   top: 20px;
-  left: 20px;
+  left: 40px;
   width: 11vh;
   z-index: 49;
   // to the right of the Storyteller, clear of their mute toggle
   &.cohost {
-    left: calc(20px + 13.2vh + 50px);
+    left: calc(40px + 13.2vh + 50px);
   }
   // an open menu goes over the other Storyteller's token and the seats
   &.menu-open {
@@ -519,14 +524,17 @@ export default {
     pointer-events: none;
     transition: opacity 120ms;
   }
-  &.speaking .speaking-ring {
+  &.speaking .speaking-ring:not(.muted-ring) {
     opacity: 1;
   }
   // only on your own token: you're talking, but muted so nobody hears it
-  &.muted-talking .speaking-ring {
-    opacity: 1;
+  // its own ring, so it fades out red (rather than turning green as it goes)
+  .muted-ring {
     border-color: #ff4d4d;
     box-shadow: 0 0 12px 3px rgba(255, 77, 77, 0.7);
+  }
+  &.muted-talking .muted-ring {
+    opacity: 1;
   }
 
   .st-plate {

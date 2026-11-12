@@ -280,6 +280,20 @@ class VoiceChat {
     return name;
   }
 
+  // Players: change the name you're known by (your seat and your voice), and
+  // remember it for next time
+  setMyName(name) {
+    const clean = String(name || "").trim().slice(0, 30);
+    if (!clean || this.state.isHost) return;
+    this.state.myName = clean;
+    try {
+      localStorage.setItem(VOICE_NAME_KEY, clean);
+    } catch (e) {
+      // storage unavailable, the name just won't be remembered
+    }
+    if (this._ws) this._send({ type: "rename", name: clean });
+  }
+
 
 
   // Your mic where you are right now: in your private chat if you are in one, else the Town Square
@@ -712,10 +726,10 @@ class VoiceChat {
     this._send({ type: "st-dead", on: !!on });
   }
 
-  // Storytellers: start the nomination music for everyone (dusk only)
-  startNominationMusicAll() {
-    if (!this.state.isHost || this.state.phase !== "dusk") return;
-    this._send({ type: "music-start", track: "nomination" });
+  // Storytellers: start a music track for everyone ("wake", "nomination" or "night")
+  startMusicAll(track) {
+    if (!this.state.isHost) return;
+    this._send({ type: "music-start", track });
   }
 
   // Storytellers: stop the music for everyone
@@ -1000,8 +1014,9 @@ class VoiceChat {
       // only a real change cancels the night music countdown (the same phase can
       // arrive twice, e.g. the phase bar and the grimoire's night switch both send it)
       if (changed) clearTimeout(this._nightMusicTimer);
+      // End of Game leaves whatever music is playing alone
       if (changed && msg.phase === "day") startMusic();
-      else if (changed) stopMusic();
+      else if (changed && msg.phase !== "end") stopMusic();
       // night: the music starts 5 seconds in, as everyone is muted
       if (changed && msg.phase === "night") {
         this._nightMusicTimer = setTimeout(() => {
@@ -1029,7 +1044,10 @@ class VoiceChat {
       if (msg.on && !this.state.stDead) playSound("death");
       this.state.stDead = !!msg.on;
     } else if (msg.type === "music-start") {
-      if (msg.track === "nomination") startNominationMusic();
+      clearTimeout(this._nightMusicTimer); // a chosen track replaces the night countdown
+      if (msg.track === "wake") startMusic();
+      else if (msg.track === "nomination") startNominationMusic();
+      else if (msg.track === "night") startNightMusic();
     } else if (msg.type === "music-stop") {
       stopMusic();
     } else if (msg.type === "st-urgent") {
