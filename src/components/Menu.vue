@@ -13,6 +13,15 @@
       <font-awesome-icon icon="book-dead" />
       {{ session.voteHistory.length }}
     </span>
+    <!-- fullscreen, like a video's button (phones turn sideways too) -->
+    <span
+      class="fullscreen"
+      v-if="fullscreen.supported"
+      @click="toggleFullscreen"
+      :title="fullscreen.active ? 'Exit fullscreen' : 'Fullscreen'"
+    >
+      <font-awesome-icon :icon="fullscreen.active ? 'compress' : 'expand'" />
+    </span>
     <span
       class="session"
       :class="{
@@ -336,6 +345,7 @@ import {
   musicPrefs,
   setNightMusicMuted
 } from "../sounds";
+import { fullscreen, toggleFullscreen } from "../fullscreen";
 
 export default {
   computed: {
@@ -348,10 +358,12 @@ export default {
       sfx,
       musicVolume,
       musicPrefs,
+      fullscreen,
       voice: voice.state
     };
   },
   methods: {
+    toggleFullscreen,
     setSfx(event) {
       setSfxVolume(parseInt(event.target.value, 10));
     },

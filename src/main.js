@@ -28,6 +28,8 @@ const faIcons = [
   "Dragon",
   "ExchangeAlt",
   "ExclamationTriangle",
+  "Expand",
+  "Compress",
   "Eye",
   "FlagCheckered",
   "FileCode",
