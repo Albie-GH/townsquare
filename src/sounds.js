@@ -8,8 +8,12 @@ import death from "./assets/sounds/piano-dark.mp3";
 import keepAnEye from "./assets/sounds/keep-an-eye.mp3";
 import subTwin from "./assets/sounds/sub-twin.mp3";
 import ancientSpells from "./assets/sounds/ancient-spells.mp3";
+import execute from "./assets/sounds/undertakers-bell.mp3";
 
-const SOUNDS = { enter, leave, call, bell, death };
+// "nominate": the same dark piano as a death, but it leaves the music alone
+const SOUNDS = { enter, leave, call, bell, death, execute, nominate: death };
+// either death sound counts as a death (ends the wake-up and nomination music)
+const DEATHS = ["death", "execute"];
 
 // ---- SFX and music volume (0-100% each), set in the settings, saved in this browser.
 // "Mute Sounds" silences both (voices are never affected). ----
@@ -112,15 +116,15 @@ export function musicGain() {
 const scaled = volume => Math.max(0, Math.min(1, volume * sfxGain()));
 const scaledMusic = volume => Math.max(0, Math.min(1, volume * musicGain()));
 // how loud each sound plays (0-1); anything not listed plays at 0.3
-const VOLUMES = { death: 0.45 };
+const VOLUMES = { death: 0.45, nominate: 0.45 };
 
 export function playSound(name, volume) {
   const src = SOUNDS[name];
-  if (!src) return;
-  if (volume === undefined) volume = VOLUMES[name] || 0.3;
   // a death ends the wake-up (and nomination) music, even if you can't hear either;
   // the night music plays on through deaths in the night
-  if (name === "death" && music.track !== "night") stopMusic();
+  if (DEATHS.includes(name) && music.track !== "night") stopMusic();
+  if (!src) return;
+  if (volume === undefined) volume = VOLUMES[name] || 0.3;
   if (soundState.muted) return;
   try {
     const audio = new Audio(src);

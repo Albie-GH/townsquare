@@ -45,10 +45,13 @@ export default {
   methods: {
     // muted by a Storyteller one by one (the same mute as a seated player's)
     stMuted(playerId) {
-      return this.voice.mutedPlayers.includes(playerId);
+      return (
+        this.voice.mutedPlayers.includes(playerId) ||
+        (this.voice.allMuted && !this.voice.exemptPlayers.includes(playerId))
+      );
     },
     toggleMute(playerId) {
-      voice.setPlayerMuted(playerId, !this.stMuted(playerId));
+      voice.stToggleMute(playerId);
     }
   },
   computed: {

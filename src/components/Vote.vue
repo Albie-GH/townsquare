@@ -118,6 +118,7 @@
 <script>
 import { mapGetters, mapState } from "vuex";
 import { sfx, sfxGain } from "../sounds";
+import voice from "../voice";
 
 export default {
   computed: {
@@ -241,6 +242,10 @@ export default {
       const index = this.players.findIndex(p => p.id === this.session.playerId);
       if (index >= 0 && !!this.session.votes[index] !== vote) {
         this.$store.commit("session/voteSync", [index, vote]);
+        // a dead player raising their hand spends their ghost vote (not for a Traveller)
+        if (vote && this.player.isDead && this.nominee.role.team !== "traveler") {
+          voice.notify("ghost");
+        }
       }
     },
     setVotingSpeed(diff) {

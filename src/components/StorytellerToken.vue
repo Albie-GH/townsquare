@@ -169,6 +169,8 @@ export default {
     canRequest() {
       return (
         this.session.isSpectator &&
+        // seated players only: spectators don't get private chats
+        this.players.some(p => p.id && p.id === this.session.playerId) &&
         this.voice.joined &&
         !!this.hostId &&
         !voice.chatOf(this.session.playerId)

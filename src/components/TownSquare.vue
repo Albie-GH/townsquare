@@ -398,7 +398,7 @@ export default {
           margin-left: 0;
           margin-right: 6px;
         }
-        .player.has-mic > .menu {
+        .player.has-mic > .menu:not(.token-menu):not(.death-menu) {
           margin-right: 52px;
         }
         .pronouns {

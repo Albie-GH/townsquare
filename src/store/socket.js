@@ -1,6 +1,28 @@
 import voice from "../voice";
 import { playSound } from "../sounds";
 
+// the sound for a death: Execute, Kill reveal (the piano), or none for Mark Dead
+// (which also leaves the music playing)
+function playDeathSound(player) {
+  if (player.deathSound === "silent") return;
+  playSound(player.deathSound === "execute" ? "execute" : "death");
+}
+
+// A dead player voting yes uses up their one ghost vote, once the hand passes them.
+// Voting for a Traveller is free, as in the rules (and as the vote buttons allow).
+function spendGhostVote(store, state) {
+  const { lockedVote, nomination, votes } = state.session;
+  const { players } = state.players;
+  if (!nomination || lockedVote < 2 || !players.length) return;
+  const nominee = players[nomination[1]];
+  if (nominee && nominee.role && nominee.role.team === "traveler") return;
+  // the seat the hand just moved past
+  const index = (nomination[1] + lockedVote - 1) % players.length;
+  const player = players[index];
+  if (!player || !player.isDead || player.isVoteless || !votes[index]) return;
+  store.commit("players/update", { player, property: "isVoteless", value: true });
+}
+
 class LiveSession {
   constructor(store) {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -166,6 +188,8 @@ class LiveSession {
             this._store.state.players.players
           );
         }
+        // a nominee was picked: everyone hears it
+        if (params) playSound("nominate");
         this._store.commit("session/nomination", { nomination: params });
         break;
       case "swap":
@@ -520,7 +544,7 @@ class LiveSession {
     } else {
       // someone just died: everyone hears it
       if (property === "isDead" && value === true && !player.isDead) {
-        playSound("death");
+        playDeathSound(player);
       }
       // just update the player otherwise
       this._store.commit("players/update", { player, property, value });
@@ -1175,6 +1199,7 @@ export default store => {
   let nightMuteTimer = null; // mutes everyone a few seconds after night falls
 
   // listen to mutations
+  let lastNomination = ""; // the nominee the Storytellers last heard the piano for
   store.subscribe(({ type, payload }, state) => {
     if (!sync.applying && canSync()) {
       if (SNAPSHOT.has(type)) sendSnapshot();
@@ -1215,6 +1240,13 @@ export default store => {
         break;
       case "session/nomination":
       case "session/setNomination":
+        // the Storytellers hear a new nominee too (players get it with the message)
+        if (type === "session/nomination" && !state.session.isSpectator) {
+          const nomination = payload ? payload.nomination || payload : null;
+          const key = nomination ? nomination.join(",") : "";
+          if (key && key !== lastNomination) playSound("nominate");
+          lastNomination = key;
+        }
         session.nomination(payload);
         break;
       case "session/setVoteInProgress":
@@ -1225,6 +1257,9 @@ export default store => {
         break;
       case "session/lockVote":
         session.lockVote();
+        // the Storyteller's grimoire spends the ghost vote of a dead player whose
+        // "yes" the clock hand just locked (the other Storyteller gets the update)
+        if (!state.session.isSpectator && !sync.applying) spendGhostVote(store, state);
         break;
       case "session/setVotingSpeed":
         session.setVotingSpeed(payload);
@@ -1283,7 +1318,7 @@ export default store => {
           payload.property === "isDead" &&
           payload.value === true
         ) {
-          playSound("death");
+          playDeathSound(payload.player);
         }
         if (payload.property === "pronouns") {
           session.sendPlayerPronouns(payload);

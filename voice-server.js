@@ -20,7 +20,7 @@ function getGame(room) {
     // cohost: playerId of the co-Storyteller (kept if they reload)
     // lineMuted: Storytellers muted on the always-open line between the two Storytellers
     // urgent: both Storytellers muted everywhere, talking only over their line
-    games.set(room, { phase: "day", timerEnd: 0, timer: null, chats: [], reqs: new Map(), seq: 0, muted: new Set(), cohost: "", cohostName: "", lineMuted: new Set(), urgent: false, stDead: false });
+    games.set(room, { phase: "day", timerEnd: 0, timer: null, chats: [], reqs: new Map(), seq: 0, muted: new Set(), exempt: new Set(), cohost: "", cohostName: "", lineMuted: new Set(), urgent: false, stDead: false });
   }
   return games.get(room);
 }
@@ -70,14 +70,15 @@ function chatsFor(game, member) {
     const num = whisper ? 0 : c.num;
     if (st) {
       // Storytellers see every chat, private ones included, and who is unseen
-      out.push({ id: c.id, num, whisper, persist: !!c.persist, members: c.members, hidden: c.hidden, locked: false, muted: c.muted || [] });
-    } else if (whisper && !c.members.includes(member.playerId)) {
+      out.push({ id: c.id, num, whisper, seen: !!c.seen, persist: !!c.persist, members: c.members, hidden: c.hidden, locked: false, muted: c.muted || [] });
+    } else if (whisper && !c.seen && !c.members.includes(member.playerId)) {
+      // a hidden Storyteller Room: only the people in it know it exists
       continue;
     } else {
       // god: Storytellers in this chat unseen, so its members can hear them
       const god = c.members.includes(member.playerId) ? c.hidden : [];
       const seen = m => !c.hidden.includes(m);
-      out.push({ id: c.id, num, whisper, persist: !!c.persist, members: c.members.filter(seen), hidden: [], locked: whisper && c.forced.includes(member.playerId), muted: (c.muted || []).filter(seen), god });
+      out.push({ id: c.id, num, whisper, seen: !!c.seen, persist: !!c.persist, members: c.members.filter(seen), hidden: [], locked: whisper && c.forced.includes(member.playerId), muted: (c.muted || []).filter(seen), god });
     }
   }
   return out;
@@ -270,6 +271,7 @@ wss.on("connection", ws => {
         chats: chatsFor(game, members.get(id)),
         busy: busyFor(game, members.get(id)),
         mutedPlayers: [...game.muted],
+        exemptPlayers: [...game.exempt],
         cohost: { playerId: game.cohost, name: game.cohostName },
         lineMuted: [...game.lineMuted],
         urgent: game.urgent,
@@ -288,6 +290,8 @@ wss.on("connection", ws => {
         const on = !!msg.on;
         if (on) mutedRooms.add(room);
         else mutedRooms.delete(room);
+        // every Mute all / Unmute all starts over: nobody is left unmuted through it
+        getGame(room).exempt.clear();
         for (const p of members.values()) p.ws.send(JSON.stringify({ type: "mute-all", on }));
       }
     }
@@ -376,6 +380,9 @@ wss.on("connection", ws => {
         // a chat request to someone already chatting goes on hold; an invite needs them free
         if (msg.kind === "invite" && chatOf(game, to)) return;
         if (msg.kind === "new" && myChat) return;
+        // nobody asks their way into a chat with a Storyteller
+        const theirs = chatOf(game, to);
+        if (msg.kind === "new" && theirs && theirs.whisper) return;
         // only the Storyteller adds people to a private Storyteller chat
         if (msg.kind === "invite" && (!myChat || myChat.whisper || myChat.members.length >= MAX_CHAT_MEMBERS)) return;
         req = { type: msg.kind, from, to, chatId: myChat ? myChat.id : 0 };
@@ -463,8 +470,9 @@ wss.on("connection", ws => {
           current.members.push(req.from);
           joined = [req.from];
         } else if (req.type === "st") {
-          // a player asked a Storyteller for a chat: a Private Room with the two of them
-          game.chats.push({ id: ++game.seq, num: 0, members: [req.to, req.from], hidden: [], whisper: true, forced: [], muted: [], persist: true });
+          // a player asked a Storyteller for a chat: a Storyteller Room with the two of
+          // them that everyone can see (but only the Storytellers can add anyone to it)
+          game.chats.push({ id: ++game.seq, num: 0, members: [req.to, req.from], hidden: [], whisper: true, seen: true, forced: [], muted: [], persist: true });
           joined = [req.from, req.to];
         } else {
           game.chats.push({ id: ++game.seq, num: lowestFreeNum(game), members: [req.from, req.to], hidden: [], whisper: false });
@@ -524,6 +532,19 @@ wss.on("connection", ws => {
         else game.muted.delete(playerId);
         broadcast(room, { type: "player-muted", playerId, on: !!msg.on });
       }
+    }
+
+    if (msg.type === "mute-exempt" && room) {
+      // Storyteller: let one player talk in the Town Square while Mute all is on
+      const members = rooms.get(room);
+      const me = members && members.get(id);
+      const game = getGame(room);
+      if (!me || !isSt(game, me)) return;
+      const playerId = String(msg.playerId || "").slice(0, 40);
+      if (!playerId) return;
+      if (msg.on) game.exempt.add(playerId);
+      else game.exempt.delete(playerId);
+      broadcast(room, { type: "player-exempt", playerId, on: !!msg.on });
     }
 
     if (msg.type === "room-mute" && room) {
@@ -593,8 +614,9 @@ wss.on("connection", ws => {
       const theirs = chatOf(game, to);
       if (theirs && theirs !== chat) leaveChat(room, game, to);
       if (!chat) {
-        // every private Storyteller chat is a Private Room (it stays open with just a Storyteller)
-        chat = { id: ++game.seq, num: 0, members: [me.playerId], hidden: [], whisper: true, forced: [], muted: [], persist: true };
+        // every private Storyteller chat is a Storyteller Room (it stays open with just a
+        // Storyteller); "Public Chat" makes one everyone can see but nobody else can join
+        chat = { id: ++game.seq, num: 0, members: [me.playerId], hidden: [], whisper: true, seen: !!msg.seen, forced: [], muted: [], persist: true };
         game.chats.push(chat);
       }
       // a chat the Storyteller opens cannot be left by the player

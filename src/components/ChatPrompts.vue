@@ -12,6 +12,10 @@
       </div>
     </div>
     <div class="prompt notice" v-else-if="noticeText">{{ noticeText }}</div>
+    <!-- people coming into rooms -->
+    <div class="prompt notice toast" v-for="t in voice.toasts" :key="'t' + t.id">
+      {{ toastText(t) }}
+    </div>
     <div class="prompt" v-for="req in voice.incoming" :key="req.id">
       <div class="text">{{ text(req) }}</div>
       <div class="buttons">
@@ -86,6 +90,8 @@ export default {
           return n.num ? `You're now in Room ${n.num}` : "Private chat started";
         case "cohost":
           return "You're now the co-Storyteller";
+        case "ghost":
+          return "Using ghost vote";
         case "declined":
           return `${who} declined`;
         case "wait":
@@ -98,6 +104,27 @@ export default {
     }
   },
   methods: {
+    // "Room 2", "a Storyteller Room" or "a public Storyteller Room"
+    roomName(t) {
+      if (!t.whisper) return `Room ${t.num}`;
+      return t.seen ? "a public Storyteller Room" : "a Storyteller Room";
+    },
+    toastText(t) {
+      const names = (t.who || []).map(id => this.nameOf(id));
+      const list =
+        names.length > 1
+          ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1]
+          : names[0] || "";
+      const room = this.roomName(t);
+      if (t.kind === "pulled") {
+        return `The Storyteller brought you into ${room}`;
+      }
+      if (t.kind === "joined") {
+        return `${list} joined ${t.whisper ? "your Storyteller Room" : room}`;
+      }
+      // entered
+      return list ? `You're in ${room} with ${list}` : `You're in ${room}`;
+    },
     // on hold you can pull them into your chat, unless it is a private
     // Storyteller chat (only the Storyteller adds people to those)
     canAdd(req) {

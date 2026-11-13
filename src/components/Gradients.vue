@@ -28,6 +28,7 @@ export default {
       gradients: [
         ["demon", "#ce0100", "#000"],
         ["townsfolk", "#1f65ff", "#000"],
+        ["ghost", "#8fd3ff", "#1a3a52"], // a dead player's raised hand
         ["default", "#4E4E4E", "#000"]
       ]
     };

@@ -164,16 +164,25 @@ export default {
     privateRooms() {
       const me = this.me();
       return this.voice.chats
-        .filter(c => c.whisper && (this.voice.isHost || c.members.includes(me)))
+        .filter(
+          c =>
+            c.whisper &&
+            (this.voice.isHost || c.seen || c.members.includes(me))
+        )
         .sort((a, b) => b.members.includes(me) - a.members.includes(me));
     },
     // Storytellers not already in a private chat can open a private room
     canOpenPrivate() {
       return this.voice.isHost && !(this.myChat && this.myChat.whisper);
     },
+    seated() {
+      const me = this.$store.state.session.playerId;
+      return !!me && this.$store.state.players.players.some(p => p.id === me);
+    },
     canJoin() {
       return (
         this.$store.state.session.isSpectator &&
+        this.seated && // spectators can't join private chats
         !this.myChat &&
         this.voice.timerActive
       );
@@ -199,12 +208,14 @@ export default {
       return chat.members.includes(this.me());
     },
     privateNote(chat) {
-      if (!this.voice.isHost) return "only you can see this";
-      if (!this.isMine(chat)) return "hidden from players";
+      // a player's chat with a Storyteller: everyone sees it, nobody else can join
+      if (chat.seen) return "Chatting with the Storyteller";
+      if (!this.voice.isHost) return "Only you can see this";
+      if (!this.isMine(chat)) return "Hidden from players";
       if (chat.members.length < 2) {
-        return "add players from their seat menu";
+        return "Add players from their seat menu";
       }
-      return "hidden from other players";
+      return "Hidden from other players";
     },
     // private chat mutes are separate from the Town Square ones
     roomMuted(chat, id) {

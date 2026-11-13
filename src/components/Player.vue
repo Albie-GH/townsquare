@@ -1,5 +1,8 @@
 <template>
-  <li :style="zoom" :class="{ 'menu-open': isMenuOpen || isTokenMenuOpen }">
+  <li
+    :style="zoom"
+    :class="{ 'menu-open': isMenuOpen || isTokenMenuOpen || isDeathMenuOpen }"
+  >
     <div
       ref="player"
       class="player"
@@ -11,6 +14,7 @@
           you: session.sessionId && player.id && player.id === session.playerId,
           'vote-yes': session.votes[index],
           'vote-lock': voteLocked,
+          'ghost-vote': usingGhostVote,
           speaking,
           'muted-talking': isYou && voice.mutedTalking,
           'token-clickable': tokenClickable,
@@ -26,6 +30,20 @@
     >
       <div class="shroud" @click="toggleStatus()"></div>
       <div class="life" @click="toggleStatus()"></div>
+      <!-- Storyteller: how they die (only the sound differs; Mark Dead is silent) -->
+      <transition name="fold">
+        <ul class="menu death-menu" v-if="isDeathMenuOpen">
+          <li @click="kill('execute')">
+            <font-awesome-icon icon="skull" />Execute
+          </li>
+          <li @click="kill('reveal')">
+            <font-awesome-icon icon="book-dead" />Kill reveal
+          </li>
+          <li @click="kill('silent')">
+            <font-awesome-icon icon="skull" />Mark Dead
+          </li>
+        </ul>
+      </transition>
 
       <div
         class="night-order first"
@@ -50,6 +68,8 @@
         :role="player.role"
         @set-role="onTokenClick"
       />
+      <!-- spectators: an empty seat's portrait says "Claim Seat" on hover, one click takes it -->
+      <div class="claim-label" v-if="quickClaim">Claim Seat</div>
       <!-- End of Game: like hiding the grimoire, the portrait and the revealed
            role are two sides of a card, and "Reveal as Drunk" turns it once more -->
       <template v-if="showReveal">
@@ -142,7 +162,7 @@
       </div>
       <div
         class="name"
-        @click="isMenuOpen = !isMenuOpen; isTokenMenuOpen = false"
+        @click="isMenuOpen = !isMenuOpen; isTokenMenuOpen = false; isDeathMenuOpen = false"
         :class="{ active: isMenuOpen }"
       >
         <span :class="{ empty: !player.name }">{{
@@ -185,11 +205,17 @@
                 myPrivateRoom ? "Add to Storyteller Room" : "Private chat"
               }}
             </li>
+            <li @click="startPublicChat" v-if="canWhisper && !myPrivateRoom">
+              <font-awesome-icon icon="comments" />Public Chat
+            </li>
             <li @click="removeFromRoom" v-if="canRemoveFromRoom">
               <font-awesome-icon icon="sign-out-alt" />Remove from Storyteller Room
             </li>
             <li @click="lowerHand" v-if="handUp">
               <font-awesome-icon icon="hand-paper" />Lower hand
+            </li>
+            <li @click="restoreGhostVote" v-if="player.isDead && player.isVoteless">
+              <font-awesome-icon icon="vote-yea" />Restore ghost vote
             </li>
             <li @click="removeMark" v-if="session.markedPlayer === index">
               <font-awesome-icon icon="skull" />Remove mark
@@ -208,7 +234,7 @@
             </li>
           </template>
           <template v-else>
-            <li @click="addRoleIcon" v-if="!isTraveler">
+            <li @click="addRoleIcon" v-if="!isTraveler && (amSeated || player.id)">
               <font-awesome-icon icon="theater-masks" />Add Possible Role
             </li>
             <li @click="claimSeat" v-if="!player.id">
@@ -281,7 +307,15 @@
             <li @click="toggleMutePlayer" v-if="player.id && voice.joined">
               <font-awesome-icon
                 :icon="playerMuted ? 'microphone' : 'microphone-slash'"
-              />{{ playerMuted ? "Unmute player" : "Mute player" }}
+              />{{
+                voice.allMuted
+                  ? playerMuted
+                    ? "ST Unmute"
+                    : "ST Mute"
+                  : playerMuted
+                  ? "Unmute player"
+                  : "Mute player"
+              }}
             </li>
           </template>
           <li
@@ -439,7 +473,13 @@ export default {
       );
     },
     playerMuted: function() {
-      return !!this.player.id && this.voice.mutedPlayers.includes(this.player.id);
+      // one by one, or by Mute all (unless a Storyteller let them talk through it)
+      return (
+        !!this.player.id &&
+        (this.voice.mutedPlayers.includes(this.player.id) ||
+          (this.voice.allMuted &&
+            !this.voice.exemptPlayers.includes(this.player.id)))
+      );
     },
     isTraveler: function() {
       return !!this.player.role && this.player.role.team === "traveler";
@@ -482,12 +522,22 @@ export default {
     },
     // while you're in a private chat, everyone not in it is darkened
     outOfRoom: function() {
-      if (!this.myChat) return false;
+      if (!this.myChat) {
+        // you're in town: seats off in one of the numbered rooms everyone can see
+        // are darkened (Storyteller Rooms and invisible Storytellers stay hidden)
+        const chat = this.theirChat;
+        return (
+          !!chat &&
+          (!chat.whisper || !!chat.seen) &&
+          !(chat.hidden || []).includes(this.player.id)
+        );
+      }
       return !(this.theirChat && this.theirChat.id === this.myChat.id);
     },
     chatTarget: function() {
       return (
         this.session.isSpectator &&
+        this.amSeated && // spectators can't start or join private chats
         this.voice.joined &&
         this.voice.timerActive &&
         !!this.player.id &&
@@ -496,7 +546,9 @@ export default {
     },
     // asking someone already in a chat puts you on hold until they answer
     canRequestChat: function() {
-      return this.chatTarget && !this.myChat;
+      // nobody can ask their way into a chat with the Storyteller
+      const theirs = this.theirChat;
+      return this.chatTarget && !this.myChat && !(theirs && theirs.whisper);
     },
     canInvite: function() {
       return (
@@ -507,11 +559,21 @@ export default {
       );
     },
     canJoin: function() {
-      return this.chatTarget && !this.myChat && !!this.theirChat;
+      // Storyteller Rooms can't be asked into, only the numbered rooms
+      return (
+        this.chatTarget &&
+        !this.myChat &&
+        !!this.theirChat &&
+        !this.theirChat.whisper
+      );
     },
     // a seat's portrait that opens a menu brightens on hover, like the
     // Storyteller's portrait does: every seat for Storytellers, other seats
     // with something to offer for players
+    // a spectator on an empty seat: clicking the portrait claims it straight away
+    quickClaim: function() {
+      return this.session.isSpectator && !this.amSeated && !this.player.id;
+    },
     tokenClickable: function() {
       if (!this.session.isSpectator) return true;
       return !this.isYou && this.hasTokenMenu;
@@ -520,9 +582,15 @@ export default {
     canRaiseHand: function() {
       return this.isYou && this.session.isSpectator && this.voice.joined;
     },
+    // you have a seat: spectators can talk in town, claim an empty seat, or
+    // note a possible role on a taken one (no private chats)
+    amSeated: function() {
+      const me = this.session.playerId;
+      return !!me && this.$store.state.players.players.some(p => p.id === me);
+    },
     hasTokenMenu: function() {
       return (
-        !this.isTraveler ||
+        (!this.isTraveler && (this.amSeated || !!this.player.id)) ||
         !this.player.id ||
         this.canRequestChat ||
         this.canInvite ||
@@ -545,12 +613,13 @@ export default {
       );
     },
     // the Storyteller has everyone muted, so players can't unmute themselves
+    // (unless a Storyteller let this one talk through Mute all)
     micLocked: function() {
-      return (this.voice.allMuted && !this.voice.isHost) || this.voice.lockedMute;
+      return this.voice.tsLocked;
     },
     micTitle: function() {
       if (!this.isYou) {
-        return this.voice.allMuted ? "Muted by the Storyteller" : "Muted";
+        return this.playerMuted ? "Muted by the Storyteller" : "Muted";
       }
       if (this.micLocked && this.isMuted) return "Muted by the Storyteller";
       return this.isMuted
@@ -560,6 +629,15 @@ export default {
     volume: function() {
       const v = this.voice.volumes[this.player.id];
       return v === undefined ? 100 : v;
+    },
+    usingGhostVote: function() {
+      const nomination = this.session.nomination;
+      if (!nomination || !this.player.isDead || !this.session.votes[this.index]) {
+        return false;
+      }
+      // voting for a Traveller doesn't use the ghost vote
+      const nominee = this.players[nomination[1]];
+      return !(nominee && nominee.role && nominee.role.team === "traveler");
     },
     voteLocked: function() {
       const session = this.session;
@@ -584,6 +662,7 @@ export default {
     return {
       isMenuOpen: false,
       isTokenMenuOpen: false,
+      isDeathMenuOpen: false,
       isSwap: false,
       voice: voice.state,
       revealFrom: null // the role shown before this reveal, so "Reveal as Drunk" flips from it
@@ -603,10 +682,11 @@ export default {
   },
   methods: {
     closeIfOutside(event) {
-      if (!this.isMenuOpen && !this.isTokenMenuOpen) return;
+      if (!this.isMenuOpen && !this.isTokenMenuOpen && !this.isDeathMenuOpen) return;
       if (this.$el.contains(event.target)) return;
       this.isMenuOpen = false;
       this.isTokenMenuOpen = false;
+      this.isDeathMenuOpen = false;
     },
     changePronouns() {
       if (this.session.isSpectator && this.player.id !== this.session.playerId)
@@ -618,17 +698,26 @@ export default {
       }
     },
     // asks the Storyteller before marking someone dead
-    confirmDeath() {
-      const name = this.player.name || "this player";
-      return confirm(`Mark ${name} as dead?`);
-    },
     confirmRevive() {
       const name = this.player.name || "this player";
       return confirm(`Bring ${name} back to life?`);
     },
-    toggleStatus() {
+    // Storyteller: marking someone dead asks how (Execute or Kill reveal)
+    kill(sound) {
+      this.isDeathMenuOpen = false;
+      if (this.session.isSpectator || this.player.isDead) return;
+      // set before the death itself, so everyone hears the right sound
+      this.updatePlayer("deathSound", sound);
+      this.toggleStatus(true);
+    },
+    toggleStatus(chosen = false) {
       if (this.session.isSpectator) return;
-      if (!this.player.isDead && !this.confirmDeath()) return;
+      if (!this.player.isDead && !chosen) {
+        this.isMenuOpen = false;
+        this.isTokenMenuOpen = false;
+        this.isDeathMenuOpen = !this.isDeathMenuOpen;
+        return;
+      }
       // in the public view a dead player first loses their vote, the next click revives them
       const revives =
         this.player.isDead &&
@@ -725,7 +814,13 @@ export default {
     },
     toggleMutePlayer() {
       this.isMenuOpen = false;
-      voice.setPlayerMuted(this.player.id, !this.playerMuted);
+      voice.stToggleMute(this.player.id);
+    },
+    // Storyteller: give a dead player their ghost vote back
+    restoreGhostVote() {
+      this.isTokenMenuOpen = false;
+      if (this.session.isSpectator || !this.player.isDead) return;
+      this.updatePlayer("isVoteless", false);
     },
     claimSeat() {
       this.isMenuOpen = false;
@@ -739,9 +834,14 @@ export default {
     // Players: your own circle raises / lowers your hand, someone else's opens a menu.
     // The Storyteller keeps the old behaviour and opens the role picker.
     onTokenClick() {
+      this.isDeathMenuOpen = false;
       if (!this.session.isSpectator) {
         this.isMenuOpen = false;
         this.isTokenMenuOpen = !this.isTokenMenuOpen;
+      } else if (this.quickClaim) {
+        this.isMenuOpen = false;
+        this.isTokenMenuOpen = false;
+        this.claimSeat();
       } else if (this.isYou) {
         this.isTokenMenuOpen = false;
         voice.toggleHand();
@@ -794,6 +894,11 @@ export default {
     startWhisper() {
       this.isTokenMenuOpen = false;
       voice.whisper(this.player.id);
+    },
+    // a Storyteller Room with this player that everyone can see
+    startPublicChat() {
+      this.isTokenMenuOpen = false;
+      voice.whisper(this.player.id, true);
     },
     removeFromRoom() {
       this.isTokenMenuOpen = false;
@@ -1109,6 +1214,11 @@ export default {
   transform: scale(1);
 }
 
+// a dead player using their ghost vote: their raised hand is light blue
+.player.ghost-vote .overlay svg.vote.fa-hand-paper * {
+  fill: url(#ghost);
+}
+
 // a locked vote can be clicked on by the ST
 #townsquare.vote:not(.spectator) .player.vote-lock .overlay svg.vote {
   pointer-events: all;
@@ -1258,6 +1368,29 @@ li.move:not(.from) .player .overlay svg.move {
   &:hover {
     filter: brightness(1.2);
   }
+}
+
+/***** "Claim Seat" over an empty seat's portrait (spectators) *****/
+.player > .claim-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: bold;
+  color: white;
+  text-shadow: 0 0 4px black, 0 0 4px black, 0 0 2px black;
+  pointer-events: none; // the portrait underneath takes the click
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 200ms ease-in-out;
+}
+.player > .token:hover ~ .claim-label {
+  opacity: 1;
 }
 
 /***** Player name *****/
@@ -1545,8 +1678,8 @@ li.move:not(.from) .player .overlay svg.move {
     pointer-events: none;
   }
 }
-// leave room for the mute icon when the menu opens
-.player.has-mic > .menu {
+// leave room for the mute icon when the nameplate menu opens
+.player.has-mic > .menu:not(.token-menu):not(.death-menu) {
   margin-left: 52px;
 }
 
@@ -1569,6 +1702,18 @@ li.move:not(.from) .player .overlay svg.move {
     min-width: 5ch;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+}
+
+/***** Death menu: beside the token like the token menu, level with the shroud *****/
+.player > .menu.death-menu {
+  bottom: auto;
+  top: 0;
+  height: auto;
+  z-index: 30;
+  &:before {
+    bottom: auto;
+    top: 8px;
   }
 }
 

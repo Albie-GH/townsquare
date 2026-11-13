@@ -8,6 +8,7 @@ const NEWPLAYER = {
   isVoteless: false,
   isDead: false,
   pronouns: "",
+  deathSound: "", // how they last died: "execute", "reveal" or "silent" (picks the sound)
   nameLocked: false, // the Storyteller stopped this player renaming themselves
   revealed: "" // End of Game: role id the Storyteller has revealed on this seat
 };

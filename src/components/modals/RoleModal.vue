@@ -24,6 +24,7 @@
         :class="[role.team]"
         :key="role.id"
         @click="setRole(role)"
+        @mouseenter="flipTip"
       >
         <Token :role="role" />
       </li>
@@ -34,6 +35,7 @@
         :class="[role.team]"
         :key="role.id"
         @click="setRole(role)"
+        @mouseenter="flipTip"
       >
         <Token :role="role" />
       </li>
@@ -93,6 +95,14 @@ export default {
     };
   },
   methods: {
+    // a token near the right edge shows its ability tip on the left instead,
+    // so it isn't cut off by the side of the screen
+    flipTip(event) {
+      const li = event.currentTarget;
+      const TIP_SPACE = 290; // the 250px tip, its gap from the token and a margin
+      const right = li.getBoundingClientRect().right;
+      li.classList.toggle("tip-left", right + TIP_SPACE > window.innerWidth);
+    },
     setRole(role) {
       if (this.playerIndex < 0) {
         // assign to bluff slot (index < 0)
@@ -154,5 +164,21 @@ ul.tokens li {
 
 #townsquare.spectator ul.tokens li.traveler {
   display: none;
+}
+</style>
+
+<style lang="scss">
+// not scoped: the ability tip lives inside the Token component
+.modal ul.tokens li.tip-left .token .ability {
+  left: auto;
+  right: 120%;
+  &:before {
+    right: auto;
+    left: 100%;
+    margin-right: 0;
+    margin-left: 2px;
+    border-right-color: transparent;
+    border-left-color: black;
+  }
 }
 </style>
