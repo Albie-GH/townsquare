@@ -232,7 +232,6 @@
                 v-for="peer in voice.peers"
                 :key="peer.id"
                 class="voice-peer"
-                :class="{ speaking: peer.speaking }"
               >
                 <span class="pname">
                   {{ peerName(peer) }}
@@ -703,10 +702,6 @@ export default {
     margin-left: 0;
     margin-right: 10px;
   }
-}
-
-.voice-peer.speaking .pname {
-  color: #3ddc84;
 }
 
 // sliders fill the space between the label and the value

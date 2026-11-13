@@ -82,3 +82,193 @@
     padding-bottom: 35%;
   }
 }
+
+// Phones held sideways: plenty of width, very little height. Everything around the
+// circle gets smaller and moves out of its way; desktops never match this.
+// (#app in front so these win over each component's own styles)
+@media screen and (max-height: 500px) and (orientation: landscape) {
+  html {
+    font-size: 1em;
+  }
+  body {
+    font-size: 0.8em;
+  }
+
+  // ---- the board: as much height as possible for the circle ----
+  #app #townsquare {
+    padding: 6px;
+  }
+  #app #townsquare.has-st {
+    padding-top: 38px;
+  }
+  #app .phase-bar {
+    top: 4px;
+    gap: 12px;
+    padding: 2px 12px;
+    font-size: 105%;
+    border-width: 2px;
+  }
+  #app #version {
+    display: none;
+  }
+
+  // ---- seats ----
+  #app .player > .name {
+    top: 2px;
+    font-size: 100%;
+    line-height: 115%;
+    padding: 0 2px;
+    border-width: 2px;
+  }
+  #app .player .mic-toggle {
+    bottom: -2px;
+    width: 22px;
+    height: 22px;
+    margin-left: 2px;
+    margin-right: 2px;
+    border-width: 2px;
+    font-size: 11px;
+  }
+  #app .player.has-mic > .menu:not(.token-menu):not(.death-menu) {
+    margin-left: 34px;
+    margin-right: 34px;
+  }
+  // the "+" for a new reminder: small and faint until you tap that seat
+  #app .circle li .reminder.add {
+    opacity: 0.4;
+    width: 26%;
+    padding-bottom: 26%;
+  }
+  #app .circle li:hover .reminder.add {
+    opacity: 1;
+  }
+  #app .info {
+    padding-top: 20px;
+  }
+
+  // ---- Storyteller portraits, top left ----
+  #app .storyteller {
+    top: 6px;
+    left: 30px;
+    width: 15vh;
+    &.cohost {
+      left: calc(30px + 15vh + 46px);
+    }
+    .st-name {
+      margin: 3px 0 0 -25%;
+      width: 150%;
+      border-width: 2px;
+    }
+    .line-toggle {
+      top: -4px;
+      width: 30px;
+      height: 30px;
+      font-size: 12px;
+    }
+  }
+
+  // ---- left: private chats ----
+  #app .chat-rooms {
+    left: 6px;
+    top: 56%;
+    width: 150px;
+    max-height: 62vh;
+    .room {
+      margin-bottom: 4px;
+      padding: 2px 6px 3px;
+      border-width: 2px;
+    }
+  }
+  #app #townsquare > .bluffs {
+    left: 6px;
+    bottom: 6px;
+    border-width: 2px;
+  }
+
+  // ---- right: spectators under the top icons, the mic panel and sheets at the
+  // bottom (never on top of each other) ----
+  #app .spectators {
+    top: 40px;
+    right: 6px;
+    transform: none;
+    width: 130px;
+    max-height: calc(100vh - 40px - 150px);
+    border-width: 2px;
+  }
+  #app .bottom-right {
+    right: 6px;
+    bottom: 6px;
+    gap: 4px;
+
+    .panel {
+      border-width: 2px;
+      li {
+        min-height: 22px;
+        padding: 1px 8px;
+        gap: 6px;
+        svg {
+          width: 14px;
+        }
+        em {
+          display: none; // keyboard shortcuts
+        }
+        &.status {
+          min-height: 18px;
+        }
+        .tip {
+          width: 170px;
+        }
+      }
+    }
+    // the sheets: one row of icons
+    .sheets-menu {
+      display: flex;
+      li {
+        flex: 1;
+        justify-content: center;
+        min-height: 26px;
+        border-top: 0;
+        span {
+          display: none;
+        }
+        // icon plus its hotkey letter, e.g. "[R]"
+        gap: 4px;
+        padding: 1px 10px;
+        em {
+          display: inline;
+        }
+        & + li {
+          border-left: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        &:first-child {
+          border-radius: 6px 0 0 6px;
+        }
+        &:last-child {
+          border-radius: 0 6px 6px 0;
+        }
+        &:not(:first-child):not(:last-child) {
+          border-radius: 0;
+        }
+      }
+    }
+  }
+  // ---- settings menu: narrower, and it scrolls when a tab is taller than the screen ----
+  #app #controls .menu {
+    width: 270px;
+    transform-origin: 250px 22px;
+    ul {
+      max-height: calc(100vh - 54px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      li {
+        flex-shrink: 0; // rows keep their height, the list scrolls instead
+        min-height: 26px;
+        &.tabs svg {
+          height: 30px;
+        }
+      }
+    }
+  }
+}

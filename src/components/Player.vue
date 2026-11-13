@@ -68,6 +68,8 @@
         :role="player.role"
         @set-role="onTokenClick"
       />
+      <!-- you're in town: which room this player is off in (below the shroud) -->
+      <div class="room-label" v-if="inRoomLabel">{{ inRoomLabel }}</div>
       <!-- spectators: an empty seat's portrait says "Claim Seat" on hover, one click takes it -->
       <div class="claim-label" v-if="quickClaim">Claim Seat</div>
       <!-- End of Game: like hiding the grimoire, the portrait and the revealed
@@ -570,6 +572,12 @@ export default {
     // a seat's portrait that opens a menu brightens on hover, like the
     // Storyteller's portrait does: every seat for Storytellers, other seats
     // with something to offer for players
+    // you're in town and this player is in a room everyone can see: say which
+    inRoomLabel: function() {
+      if (this.myChat || !this.outOfRoom) return "";
+      const chat = this.theirChat;
+      return chat.whisper ? "In Storyteller Room" : `In Room ${chat.num}`;
+    },
     // a spectator on an empty seat: clicking the portrait claims it straight away
     quickClaim: function() {
       return this.session.isSpectator && !this.amSeated && !this.player.id;
@@ -1368,6 +1376,23 @@ li.move:not(.from) .player .overlay svg.move {
   &:hover {
     filter: brightness(1.2);
   }
+}
+
+/***** "In Room 2" on a darkened portrait, low enough to clear the dead shroud *****/
+.player > .room-label {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 110%;
+  text-align: center;
+  font-size: 85%;
+  font-weight: bold;
+  line-height: 1.1;
+  color: white;
+  text-shadow: 0 0 4px black, 0 0 4px black, 0 0 2px black;
+  pointer-events: none;
+  z-index: 3; // over the darkened token (the shroud only covers the top)
 }
 
 /***** "Claim Seat" over an empty seat's portrait (spectators) *****/
